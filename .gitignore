@@ -9,3 +9,4 @@ screenshot_*.png
 preview_*.gif
 .DS_Store
 .lock-waf_*
+uploaded-project/

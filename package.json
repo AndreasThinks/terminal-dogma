@@ -1,12 +1,12 @@
 {
-  "name": "pebble-watchface",
+  "name": "nerv-watchface",
   "author": "Andreas Varotsis",
   "version": "1.0.0",
-  "keywords": ["pebble-app", "watchface"],
+  "keywords": ["pebble-app", "watchface", "nerv"],
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "Pebble Watchface",
+    "displayName": "NERV Watchface",
     "uuid": "44201a31-161f-4e94-ad74-24429abe073e",
     "sdkVersion": "3",
     "enableMultiJS": true,
@@ -15,7 +15,13 @@
       "watchface": true
     },
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "png",
+          "name": "IMAGE_NERV_LOGO",
+          "file": "images/nerv-logo-red.png"
+        }
+      ]
     }
   }
 }
