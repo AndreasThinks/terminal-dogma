@@ -1,7 +1,7 @@
 {
   "name": "nerv-watchface",
   "author": "Andreas Varotsis",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "keywords": ["pebble-app", "watchface", "nerv"],
   "private": true,
   "dependencies": {},
