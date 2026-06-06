@@ -485,7 +485,6 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
-  draw_tiny_text(ctx, "SYNC", 8, 2, 1, GColorWhite);
 
   if (s_logo_bitmap) {
     graphics_context_set_compositing_mode(ctx, GCompOpSet);
@@ -494,7 +493,6 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     draw_text_box(ctx, "NERV", GRect(8, 38, 88, 28), s_font_chip, color_red(), GTextAlignmentCenter);
   }
 
-  draw_tiny_text(ctx, "INT PWR", 118, 12, 1, GColorWhite);
 
   GColor accent = accent_color();
   graphics_context_set_stroke_color(ctx, accent);
@@ -515,12 +513,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 
   draw_bottom_panel(ctx);
 
-  {
-      char magi_buf[24];
-      snprintf(magi_buf, sizeof(magi_buf), "MAGI SYS VER 1.0.2");
-      int w = tiny_text_width(magi_buf, 1);
-      draw_tiny_text(ctx, magi_buf, (SCREEN_W - w) / 2, 218, 1, GColorWhite);
-    }
+
 }
 
 static void update_steps(void) {
