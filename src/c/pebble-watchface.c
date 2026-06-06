@@ -381,7 +381,6 @@ static void draw_bio_mon(GContext *ctx) {
   draw_text_box(ctx, hr_buf, GRect(box.origin.x, box.origin.y + 28, box.size.w, 12),
                 s_font_chip_small, accent, GTextAlignmentCenter);
 
-  draw_tiny_centered(ctx, "BPM", GRect(box.origin.x, box.origin.y + 39, box.size.w, 8), 1, GColorWhite);
 }
 
 static void draw_hazard_corner(GContext *ctx, int x, int y, int s, bool tl) {
@@ -453,7 +452,7 @@ static void draw_bottom_panel(GContext *ctx) {
         char temp_buf[4];
         snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
         char weather_buf[16];
-        snprintf(weather_buf, sizeof(weather_buf), "%s  %s\u00B0", s_weather_icon, temp_buf);
+        snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
         draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
