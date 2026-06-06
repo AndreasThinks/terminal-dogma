@@ -249,9 +249,6 @@ static void draw_l_series(GContext *ctx) {
     int ty = sy + sh - (v * sh) / 100;
     graphics_draw_line(ctx, GPoint(sx - 5, ty), GPoint(sx, ty));
   }
-
-  draw_tiny_centered(ctx, s_chevron_source == CHEVRON_STEPS ? "STEPS" : "BATT",
-                     GRect(x + 2, sy + sh + 4, 50, 7), 1, GColorWhite);
 }
 
 static void draw_sun_icon(GContext *ctx, GPoint c, int r, GColor color) {
@@ -432,13 +429,13 @@ static void draw_bottom_panel(GContext *ctx) {
 
   graphics_context_set_stroke_color(ctx, accent);
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_rect(ctx, GRect(px, py, pw, ph));
-  graphics_draw_rect(ctx, GRect(px + 1, py + 1, pw - 2, ph - 2));
+  /* top border line only, no bottom border */
+  graphics_draw_line(ctx, GPoint(px, py), GPoint(px + pw - 1, py));
+  graphics_draw_line(ctx, GPoint(px, py + 1), GPoint(px + pw - 1, py + 1));
 
   draw_hazard_corner(ctx, px, py, 5, true);
   draw_hazard_corner(ctx, px + pw - 5, py, 5, false);
-  draw_hazard_corner(ctx, px, py + ph - 5, 5, true);
-  draw_hazard_corner(ctx, px + pw - 5, py + ph - 5, 5, false);
+  
 
   int d1x = px + 72, d2x = px + 138;
   graphics_draw_line(ctx, GPoint(d1x, py + 2), GPoint(d1x, py + ph - 2));
@@ -485,6 +482,8 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
+  /* top-left corner label */
+  draw_text_box(ctx, "MAGI SYS", GRect(4, 0, 100, 14), s_font_chip_small, accent_color(), GTextAlignmentLeft);
 
   if (s_logo_bitmap) {
     graphics_context_set_compositing_mode(ctx, GCompOpSet);
@@ -493,6 +492,8 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     draw_text_box(ctx, "NERV", GRect(8, 38, 88, 28), s_font_chip, color_red(), GTextAlignmentCenter);
   }
 
+  /* top-right corner label */
+  draw_text_box(ctx, "INTERNAL PWR", GRect(110, 0, 90, 14), s_font_chip_small, GColorWhite, GTextAlignmentCenter);
 
   GColor accent = accent_color();
   graphics_context_set_stroke_color(ctx, accent);
