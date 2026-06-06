@@ -49,6 +49,7 @@ static char s_steps_text[16];
 static char s_battery_text[8];
 static int s_battery_pct = 72;
 static int s_steps_count = 7061;
+static int s_heart_rate = 72;
 
 static int s_temperature = 18;
 static char s_weather_icon[8] = "SUN";
@@ -147,6 +148,7 @@ static int tiny_text_width(const char *text, int scale) {
 
 static void draw_tiny_text(GContext *ctx, const char *text, int x, int y, int scale, GColor color) {
   graphics_context_set_fill_color(ctx, color);
+  int ps = scale > 0 ? scale : 1;
   for (int i = 0; text && text[i]; i++) {
     char c = text[i];
     if (c >= 'a' && c <= 'z') c -= 32;
@@ -154,7 +156,7 @@ static void draw_tiny_text(GContext *ctx, const char *text, int x, int y, int sc
       uint8_t bits = glyph_row(c, row);
       for (int col = 0; col < 3; col++) {
         if (bits & (1 << (2 - col))) {
-          graphics_fill_rect(ctx, GRect(x + (i * 4 + col) * scale, y + row * scale, scale, scale), 0, GCornerNone);
+          graphics_fill_rect(ctx, GRect(x + (i * 4 + col) * ps, y + row * ps, ps, ps), 0, GCornerNone);
         }
       }
     }
@@ -249,7 +251,7 @@ static void draw_l_series(GContext *ctx) {
   }
 
   draw_tiny_centered(ctx, s_chevron_source == CHEVRON_STEPS ? "STEPS" : "BATT",
-                     GRect(x + 2, sy + sh + 4, 50, 7), 1, color_grey());
+                     GRect(x + 2, sy + sh + 4, 50, 7), 1, GColorWhite);
 }
 
 static void draw_sun_icon(GContext *ctx, GPoint c, int r, GColor color) {
@@ -356,27 +358,124 @@ static void draw_chip(GContext *ctx, GRect r, ChipKind kind) {
   }
 }
 
-static void draw_bottom_chips(GContext *ctx) {
-  GRect left = GRect(7, BOTTOM_Y, 67, 24);
-  GRect mid = GRect(78, BOTTOM_Y, 64, 24);
-  GRect right = GRect(146, BOTTOM_Y, 47, 24);
+static void draw_heart_icon(GContext *ctx, GPoint c, int r, GColor color) {
+  graphics_context_set_fill_color(ctx, color);
+  graphics_fill_circle(ctx, GPoint(c.x - 3, c.y - 1), 3);
+  graphics_fill_circle(ctx, GPoint(c.x + 3, c.y - 1), 3);
+  GPoint tri[] = {GPoint(c.x - 6, c.y + 1), GPoint(c.x + 6, c.y + 1), GPoint(c.x, c.y + 6)};
+  GPathInfo info = {.num_points = 3, .points = tri};
+  GPath *path = gpath_create(&info);
+  if (path) { gpath_move_to(path, GPoint(0, 0)); gpath_draw_filled(ctx, path); gpath_destroy(path); }
+}
+
+static void draw_bio_mon(GContext *ctx) {
+  GRect box = GRect(152, 132, 44, 50);
+  GColor accent = accent_color();
+  graphics_context_set_stroke_color(ctx, accent);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_rect(ctx, box);
+
+  draw_tiny_centered(ctx, "BIO", GRect(box.origin.x, box.origin.y + 3, box.size.w, 7), 1, accent);
+
+  draw_heart_icon(ctx, GPoint(box.origin.x + box.size.w / 2, box.origin.y + 21), 4, accent);
+
+  char hr_buf[4];
+  snprintf(hr_buf, sizeof(hr_buf), "%d", s_heart_rate);
+  draw_text_box(ctx, hr_buf, GRect(box.origin.x, box.origin.y + 28, box.size.w, 12),
+                s_font_chip_small, accent, GTextAlignmentCenter);
+
+  draw_tiny_centered(ctx, "BPM", GRect(box.origin.x, box.origin.y + 39, box.size.w, 8), 1, GColorWhite);
+}
+
+static void draw_hazard_corner(GContext *ctx, int x, int y, int s, bool tl) {
+  GColor accent = accent_color();
+  for (int row = 0; row < s; row++) {
+    for (int col = 0; col < s; col++) {
+      bool red_px = ((row + col) % 2) == (tl ? 0 : 1);
+      if (red_px) {
+        graphics_context_set_fill_color(ctx, accent);
+      } else {
+        graphics_context_set_fill_color(ctx, GColorWhite);
+      }
+      graphics_fill_rect(ctx, GRect(x + col, y + row, 1, 1), 0, GCornerNone);
+    }
+  }
+}
+
+static void draw_panel_column(GContext *ctx, GRect r, const char *label, const char *sub, GColor lc, bool has_stripe) {
+  GColor accent = accent_color();
+  graphics_context_set_stroke_color(ctx, accent);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, GPoint(r.origin.x, r.origin.y + 3), GPoint(r.origin.x + r.size.w - 1, r.origin.y + 3));
+
+  draw_tiny_centered(ctx, label, GRect(r.origin.x, r.origin.y + 4, r.size.w, 7), 1, accent);
+
+  if (sub) {
+    draw_text_box(ctx, sub, GRect(r.origin.x + 1, r.origin.y + 12, r.size.w - 2, 12),
+                  s_font_chip_small, lc, GTextAlignmentCenter);
+  }
+
+  if (has_stripe) {
+    for (int row = 0; row < 4; row++) {
+      for (int col = 4; col < r.size.w - 3; col++) {
+        bool red_px = ((row + col) % 2) == 0;
+        graphics_context_set_fill_color(ctx, red_px ? accent : GColorBlack);
+        graphics_fill_rect(ctx, GRect(r.origin.x + col, r.origin.y + r.size.h - 4 + row, 1, 1), 0, GCornerNone);
+      }
+    }
+  }
+}
+
+static void draw_bottom_panel(GContext *ctx) {
+  const int px = 4, py = BOTTOM_Y, pw = 192, ph = 30;
+  GColor accent = accent_color();
+
+  graphics_context_set_stroke_color(ctx, accent);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_rect(ctx, GRect(px, py, pw, ph));
+  graphics_draw_rect(ctx, GRect(px + 1, py + 1, pw - 2, ph - 2));
+
+  draw_hazard_corner(ctx, px, py, 5, true);
+  draw_hazard_corner(ctx, px + pw - 5, py, 5, false);
+  draw_hazard_corner(ctx, px, py + ph - 5, 5, true);
+  draw_hazard_corner(ctx, px + pw - 5, py + ph - 5, 5, false);
+
+  int d1x = px + 72, d2x = px + 138;
+  graphics_draw_line(ctx, GPoint(d1x, py + 2), GPoint(d1x, py + ph - 2));
+  graphics_draw_line(ctx, GPoint(d2x, py + 2), GPoint(d2x, py + ph - 2));
+
+  GRect c1 = GRect(px + 2, py + 2, d1x - px - 2, ph - 4);
+  GRect c2 = GRect(d1x + 2, py + 2, d2x - d1x - 2, ph - 4);
+  GRect c3 = GRect(d2x + 2, py + 2, px + pw - d2x - 2, ph - 4);
 
   switch (s_bottom_layout) {
     case LAYOUT_DATE_BATTERY_WEATHER:
-      draw_chip(ctx, left, CHIP_DATE);
-      draw_chip(ctx, mid, CHIP_BATTERY);
-      draw_chip(ctx, right, CHIP_WEATHER);
+      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), true);
+      draw_panel_column(ctx, c2, "BATT", s_battery_text, accent, false);
+      {
+        char temp_buf[4];
+        snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
+        char weather_buf[16];
+        snprintf(weather_buf, sizeof(weather_buf), "%s  %s\u00B0", s_weather_icon, temp_buf);
+        draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), true);
+      }
       break;
     case LAYOUT_DATE_STEPS_BATTERY:
-      draw_chip(ctx, left, CHIP_DATE);
-      draw_chip(ctx, mid, CHIP_STEPS);
-      draw_chip(ctx, right, CHIP_BATTERY);
+      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), true);
+      draw_panel_column(ctx, c2, "STEPS", s_steps_text, color_yellow(), false);
+      draw_panel_column(ctx, c3, "BATT", s_battery_text, accent, true);
       break;
     case LAYOUT_DATE_STEPS_WEATHER:
     default:
-      draw_chip(ctx, left, CHIP_DATE);
-      draw_chip(ctx, mid, CHIP_STEPS);
-      draw_chip(ctx, right, CHIP_WEATHER);
+      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), true);
+      draw_panel_column(ctx, c2, "STEPS", s_steps_text, color_yellow(), false);
+      {
+        char temp_buf[4];
+        snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
+        char weather_buf[16];
+        snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
+        draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), true);
+      }
       break;
   }
 }
@@ -386,6 +485,8 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
+  draw_tiny_text(ctx, "SYNC", 8, 2, 1, GColorWhite);
+
   if (s_logo_bitmap) {
     graphics_context_set_compositing_mode(ctx, GCompOpSet);
     graphics_draw_bitmap_in_rect(ctx, s_logo_bitmap, GRect(8, 12, 88, 104));
@@ -393,13 +494,33 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     draw_text_box(ctx, "NERV", GRect(8, 38, 88, 28), s_font_chip, color_red(), GTextAlignmentCenter);
   }
 
+  draw_tiny_text(ctx, "INT PWR", 118, 12, 1, GColorWhite);
+
+  GColor accent = accent_color();
+  graphics_context_set_stroke_color(ctx, accent);
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_draw_line(ctx, GPoint(110, 12), GPoint(110, 118));
+
   draw_l_series(ctx);
 
-  draw_tiny_text(ctx, "LOCAL TIME // ACTIVE", 9, 120, 1, color_grey());
-  draw_text_box(ctx, s_time_text, GRect(0, 130, SCREEN_W, 58),
+  graphics_draw_line(ctx, GPoint(4, 118), GPoint(196, 118));
+
+  draw_tiny_text(ctx, "LOCAL TIME // ACTIVE", 9, 122, 1, color_grey());
+  draw_text_box(ctx, s_time_text, GRect(0, 128, 150, 56),
                 s_font_time, GColorWhite, GTextAlignmentCenter);
 
-  draw_bottom_chips(ctx);
+  draw_bio_mon(ctx);
+
+  graphics_draw_line(ctx, GPoint(4, 188), GPoint(196, 188));
+
+  draw_bottom_panel(ctx);
+
+  {
+      char magi_buf[24];
+      snprintf(magi_buf, sizeof(magi_buf), "MAGI SYS VER 1.0.2");
+      int w = tiny_text_width(magi_buf, 1);
+      draw_tiny_text(ctx, magi_buf, (SCREEN_W - w) / 2, 218, 1, GColorWhite);
+    }
 }
 
 static void update_steps(void) {
@@ -445,6 +566,13 @@ static void update_time(void) {
 
 static void update_battery_text(void) {
   snprintf(s_battery_text, sizeof(s_battery_text), "%d%%", s_battery_pct);
+}
+
+static void update_heart_rate(void) {
+#if defined(PBL_HEALTH)
+  HealthValue hr = health_service_peek_current_value(HealthMetricHeartRateBPM);
+  if (hr > 0) s_heart_rate = (int)hr;
+#endif
 }
 
 static void save_settings(void) {
@@ -516,6 +644,7 @@ static void battery_handler(BatteryChargeState state) {
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time();
+  update_heart_rate();
   if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
 
   if (tick_time->tm_min % 30 == 0) {
