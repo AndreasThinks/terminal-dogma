@@ -1,0 +1,11 @@
+build/
+node_modules/
+*.pbw
+*.elf
+*.o
+*.pyc
+__pycache__/
+screenshot_*.png
+preview_*.gif
+.DS_Store
+.lock-waf_*

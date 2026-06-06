@@ -1,0 +1,21 @@
+{
+  "name": "pebble-watchface",
+  "author": "Andreas Varotsis",
+  "version": "1.0.0",
+  "keywords": ["pebble-app", "watchface"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Pebble Watchface",
+    "uuid": "44201a31-161f-4e94-ad74-24429abe073e",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": ["emery"],
+    "watchapp": {
+      "watchface": true
+    },
+    "resources": {
+      "media": []
+    }
+  }
+}
