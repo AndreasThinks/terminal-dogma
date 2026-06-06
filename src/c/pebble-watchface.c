@@ -433,7 +433,7 @@ static void draw_bottom_panel(GContext *ctx) {
   graphics_draw_line(ctx, GPoint(px, py), GPoint(px + pw - 1, py));
   graphics_draw_line(ctx, GPoint(px, py + 1), GPoint(px + pw - 1, py + 1));
 
-  draw_hazard_corner(ctx, px, py, 5, true);
+  draw_hazard_corner(ctx, px, py, 5, false);
   draw_hazard_corner(ctx, px + pw - 5, py, 5, false);
   
 
@@ -447,31 +447,31 @@ static void draw_bottom_panel(GContext *ctx) {
 
   switch (s_bottom_layout) {
     case LAYOUT_DATE_BATTERY_WEATHER:
-      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), true);
+      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), false);
       draw_panel_column(ctx, c2, "BATT", s_battery_text, accent, false);
       {
         char temp_buf[4];
         snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
         char weather_buf[16];
         snprintf(weather_buf, sizeof(weather_buf), "%s  %s\u00B0", s_weather_icon, temp_buf);
-        draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), true);
+        draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
     case LAYOUT_DATE_STEPS_BATTERY:
-      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), true);
+      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), false);
       draw_panel_column(ctx, c2, "STEPS", s_steps_text, color_yellow(), false);
-      draw_panel_column(ctx, c3, "BATT", s_battery_text, accent, true);
+      draw_panel_column(ctx, c3, "BATT", s_battery_text, accent, false);
       break;
     case LAYOUT_DATE_STEPS_WEATHER:
     default:
-      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), true);
+      draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), false);
       draw_panel_column(ctx, c2, "STEPS", s_steps_text, color_yellow(), false);
       {
         char temp_buf[4];
         snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
         char weather_buf[16];
         snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
-        draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), true);
+        draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
   }
@@ -696,7 +696,7 @@ static void init(void) {
 
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   battery_state_service_subscribe(battery_handler);
-  window_stack_push(s_main_window, true);
+  window_stack_push(s_main_window, false);
 }
 
 static void deinit(void) {
