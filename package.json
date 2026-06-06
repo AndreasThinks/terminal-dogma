@@ -1,7 +1,7 @@
 {
   "name": "nerv-watchface",
   "author": "Andreas Varotsis",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "keywords": ["pebble-app", "watchface", "nerv"],
   "private": true,
   "dependencies": {},
@@ -10,7 +10,7 @@
     "uuid": "44201a31-161f-4e94-ad74-24429abe073e",
     "sdkVersion": "3",
     "enableMultiJS": true,
-    "capabilities": ["configurable"],
+    "capabilities": ["configurable", "location"],
     "targetPlatforms": ["emery"],
     "watchapp": {
       "watchface": true
@@ -19,7 +19,11 @@
       "CLOCK_FORMAT",
       "CHEVRON_SOURCE",
       "BOTTOM_LAYOUT",
-      "ACCENT_COLOR"
+      "ACCENT_COLOR",
+      "TEMPERATURE",
+      "CONDITIONS",
+      "WEATHER_ICON",
+      "REQUEST_WEATHER"
     ],
     "resources": {
       "media": [

@@ -1,11 +1,13 @@
 var SETTINGS_KEY = 'nerv-watchface-settings-v1';
 
 var DEFAULTS = {
-  CLOCK_FORMAT: 0,     // 0 system, 1 24h, 2 12h
-  CHEVRON_SOURCE: 0,   // 0 battery, 1 steps
-  BOTTOM_LAYOUT: 0,    // 0 date|steps|weather, 1 date|battery|weather, 2 date|steps|battery
-  ACCENT_COLOR: 0      // 0 red, 1 amber, 2 green, 3 cyan
+  CLOCK_FORMAT: 0,
+  CHEVRON_SOURCE: 0,
+  BOTTOM_LAYOUT: 0,
+  ACCENT_COLOR: 0
 };
+
+var OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
 
 function loadSettings() {
   var saved = {};
@@ -32,6 +34,71 @@ function sendSettings(settings) {
   }, function(e) {
     console.log('NERV settings failed: ' + JSON.stringify(e));
   });
+}
+
+function fetchWeather(lat, lon) {
+  var url = OPEN_METEO_URL + '?latitude=' + lat +
+    '&longitude=' + lon +
+    '&current=temperature_2m,weather_code';
+
+  var req = new XMLHttpRequest();
+  req.open('GET', url, true);
+  req.onload = function() {
+    if (req.status !== 200) {
+      console.log('Open-Meteo HTTP ' + req.status);
+      return;
+    }
+    try {
+      var data = JSON.parse(req.responseText);
+      if (!data || !data.current) return;
+
+      var temp = Math.round(data.current.temperature_2m);
+      var code = data.current.weather_code;
+      var condition = weatherCodeToCondition(code);
+      var icon = weatherCodeToIcon(code);
+
+      var msg = {};
+      msg.TEMPERATURE = temp;
+      msg.CONDITIONS = condition;
+      msg.WEATHER_ICON = icon;
+
+      Pebble.sendAppMessage(msg, function() {
+        console.log('Weather sent: ' + temp + '\u00B0C ' + condition + ' (' + icon + ')');
+      }, function(e) {
+        console.log('Weather send failed: ' + JSON.stringify(e));
+      });
+    } catch (e) {
+      console.log('Open-Meteo parse error: ' + e);
+    }
+  };
+  req.onerror = function() {
+    console.log('Open-Meteo network error');
+  };
+  req.send();
+}
+
+function weatherCodeToCondition(code) {
+  if (code === 0) return 'Clear';
+  if (code >= 1 && code <= 3) return 'Partly Cloudy';
+  if (code === 45 || code === 48) return 'Fog';
+  if (code >= 51 && code <= 55) return 'Drizzle';
+  if (code >= 61 && code <= 65) return 'Rain';
+  if (code >= 71 && code <= 77) return 'Snow';
+  if (code >= 80 && code <= 82) return 'Showers';
+  if (code >= 95 && code <= 99) return 'T-Storm';
+  return 'Cloudy';
+}
+
+function weatherCodeToIcon(code) {
+  if (code === 0) return 'SUN';
+  if (code >= 1 && code <= 3) return 'CLOUD';
+  if (code === 45 || code === 48) return 'FOG';
+  if (code >= 51 && code <= 55) return 'RAIN';
+  if (code >= 61 && code <= 65) return 'RAIN';
+  if (code >= 71 && code <= 77) return 'SNOW';
+  if (code >= 80 && code <= 82) return 'RAIN';
+  if (code >= 95 && code <= 99) return 'TSTORM';
+  return 'CLOUD';
 }
 
 function option(value, label, selected) {
@@ -65,7 +132,7 @@ function buildConfigHtml(settings) {
       option(0, 'NERV red', settings.ACCENT_COLOR) + option(1, 'Amber', settings.ACCENT_COLOR) + option(2, 'Green', settings.ACCENT_COLOR) + option(3, 'Cyan', settings.ACCENT_COLOR) +
     '</select>' +
     '<button id="save">Save</button>' +
-    '<div class="note">Logo remains red for now. HUD accents change color.</div>' +
+    '<div class="note">Weather fetches live from Open-Meteo using GPS. Logo stays NERV red.</div>' +
     '</div><script>' +
     'document.getElementById("save").onclick=function(){var s={};["CLOCK_FORMAT","CHEVRON_SOURCE","BOTTOM_LAYOUT","ACCENT_COLOR"].forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(s));};' +
     '</script></body></html>';
@@ -73,6 +140,11 @@ function buildConfigHtml(settings) {
 
 Pebble.addEventListener('ready', function() {
   sendSettings(loadSettings());
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    fetchWeather(pos.coords.latitude, pos.coords.longitude);
+  }, function(err) {
+    console.log('Geolocation error: ' + JSON.stringify(err));
+  }, {timeout: 15000, maximumAge: 600000});
 });
 
 Pebble.addEventListener('showConfiguration', function() {
@@ -91,4 +163,14 @@ Pebble.addEventListener('webviewclosed', function(e) {
   }
   saveSettings(settings);
   sendSettings(settings);
+});
+
+Pebble.addEventListener('appmessage', function(e) {
+  if (e.payload && e.payload.REQUEST_WEATHER) {
+    navigator.geolocation.getCurrentPosition(function(pos) {
+      fetchWeather(pos.coords.latitude, pos.coords.longitude);
+    }, function(err) {
+      console.log('Geolocation error on request: ' + JSON.stringify(err));
+    }, {timeout: 15000, maximumAge: 600000});
+  }
 });

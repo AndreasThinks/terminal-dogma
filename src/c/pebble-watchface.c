@@ -38,6 +38,10 @@ extern uint32_t MESSAGE_KEY_CLOCK_FORMAT;
 extern uint32_t MESSAGE_KEY_CHEVRON_SOURCE;
 extern uint32_t MESSAGE_KEY_BOTTOM_LAYOUT;
 extern uint32_t MESSAGE_KEY_ACCENT_COLOR;
+extern uint32_t MESSAGE_KEY_TEMPERATURE;
+extern uint32_t MESSAGE_KEY_CONDITIONS;
+extern uint32_t MESSAGE_KEY_WEATHER_ICON;
+extern uint32_t MESSAGE_KEY_REQUEST_WEATHER;
 
 static char s_time_text[8];
 static char s_date_text[16];
@@ -45,6 +49,10 @@ static char s_steps_text[16];
 static char s_battery_text[8];
 static int s_battery_pct = 72;
 static int s_steps_count = 7061;
+
+static int s_temperature = 18;
+static char s_weather_icon[8] = "SUN";
+static bool s_weather_valid = false;
 
 static int s_clock_format = CLOCK_SYSTEM;
 static int s_chevron_source = CHEVRON_BATTERY;
@@ -258,6 +266,53 @@ static void draw_sun_icon(GContext *ctx, GPoint c, int r, GColor color) {
   }
 }
 
+static void draw_cloud_icon(GContext *ctx, GPoint c, int r, GColor color) {
+  graphics_context_set_fill_color(ctx, color);
+  int cx = c.x, cy = c.y;
+  graphics_fill_rect(ctx, GRect(cx - r, cy, r * 2, r / 2 + 1), 99, GCornersAll);
+  graphics_fill_circle(ctx, GPoint(cx - r / 2, cy - 1), r / 2 + 1);
+  graphics_fill_circle(ctx, GPoint(cx + r / 3, cy - r / 3), r / 2 + 2);
+}
+
+static void draw_rain_icon(GContext *ctx, GPoint c, int r, GColor color) {
+  draw_cloud_icon(ctx, c, r, color);
+  graphics_context_set_fill_color(ctx, color);
+  for (int i = 0; i < 3; i++) {
+    graphics_fill_rect(ctx, GRect(c.x - r + 2 + i * (r * 2 / 3), c.y + r, 1, r / 2), 0, GCornerNone);
+  }
+}
+
+static void draw_snow_icon(GContext *ctx, GPoint c, int r, GColor color) {
+  draw_cloud_icon(ctx, c, r, color);
+  graphics_context_set_fill_color(ctx, color);
+  for (int i = 0; i < 3; i++) {
+    graphics_fill_circle(ctx, GPoint(c.x - r + 2 + i * (r * 2 / 3), c.y + r + 1), 1);
+  }
+}
+
+static void draw_weather_icon(GContext *ctx, GPoint c, int r, GColor color, const char *icon) {
+  if (!icon) { draw_sun_icon(ctx, c, r, color); return; }
+
+  if (strcmp(icon, "SUN") == 0) {
+    draw_sun_icon(ctx, c, r, color);
+  } else if (strcmp(icon, "CLOUD") == 0 || strcmp(icon, "FOG") == 0) {
+    draw_cloud_icon(ctx, c, r, color);
+  } else if (strcmp(icon, "RAIN") == 0) {
+    draw_rain_icon(ctx, c, r, color);
+  } else if (strcmp(icon, "SNOW") == 0) {
+    draw_snow_icon(ctx, c, r, color);
+  } else if (strcmp(icon, "TSTORM") == 0) {
+    draw_rain_icon(ctx, c, r, color);
+    graphics_context_set_fill_color(ctx, color_yellow());
+    int32_t sangle = DEG_TO_TRIGANGLE(45);
+    int sx = c.x + (cos_lookup(sangle) * (r + 3)) / TRIG_MAX_RATIO;
+    int sy = c.y + (sin_lookup(sangle) * (r + 3)) / TRIG_MAX_RATIO;
+    graphics_fill_rect(ctx, GRect(sx - 1, sy - 3, 2, 4), 0, GCornerNone);
+  } else {
+    draw_sun_icon(ctx, c, r, color);
+  }
+}
+
 typedef enum {
   CHIP_DATE = 0,
   CHIP_STEPS = 1,
@@ -288,11 +343,15 @@ static void draw_chip(GContext *ctx, GRect r, ChipKind kind) {
     case CHIP_WEATHER:
     default:
       draw_outline_chip(ctx, r, color_cyan());
-      draw_sun_icon(ctx, GPoint(r.origin.x + 14, r.origin.y + 12), 3, color_cyan());
-      draw_text_box(ctx, "18", GRect(r.origin.x + 19, r.origin.y + 4, 19, 16),
-                    s_font_chip, color_cyan(), GTextAlignmentCenter);
-      graphics_context_set_stroke_color(ctx, color_cyan());
-      graphics_draw_circle(ctx, GPoint(r.origin.x + 38, r.origin.y + 7), 2);
+      draw_weather_icon(ctx, GPoint(r.origin.x + 14, r.origin.y + 12), 3, color_cyan(), s_weather_icon);
+      {
+        char temp_buf[4];
+        snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
+        draw_text_box(ctx, temp_buf, GRect(r.origin.x + 19, r.origin.y + 4, 19, 16),
+                      s_font_chip, color_cyan(), GTextAlignmentCenter);
+        graphics_context_set_stroke_color(ctx, color_cyan());
+        graphics_draw_circle(ctx, GPoint(r.origin.x + 38, r.origin.y + 7), 2);
+      }
       break;
   }
 }
@@ -416,16 +475,37 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
   Tuple *chevrons = dict_find(iterator, MESSAGE_KEY_CHEVRON_SOURCE);
   Tuple *layout = dict_find(iterator, MESSAGE_KEY_BOTTOM_LAYOUT);
   Tuple *accent = dict_find(iterator, MESSAGE_KEY_ACCENT_COLOR);
+  Tuple *temp = dict_find(iterator, MESSAGE_KEY_TEMPERATURE);
+  Tuple *icon = dict_find(iterator, MESSAGE_KEY_WEATHER_ICON);
 
-  if (clock) s_clock_format = clamp_setting((int)clock->value->int32, CLOCK_SYSTEM, CLOCK_12H, CLOCK_SYSTEM);
-  if (chevrons) s_chevron_source = clamp_setting((int)chevrons->value->int32, CHEVRON_BATTERY, CHEVRON_STEPS, CHEVRON_BATTERY);
-  if (layout) s_bottom_layout = clamp_setting((int)layout->value->int32, LAYOUT_DATE_STEPS_WEATHER, LAYOUT_DATE_STEPS_BATTERY, LAYOUT_DATE_STEPS_WEATHER);
-  if (accent) s_accent_color = clamp_setting((int)accent->value->int32, ACCENT_RED, ACCENT_CYAN, ACCENT_RED);
+  bool redraw = false;
 
-  save_settings();
-  update_time();
-  update_battery_text();
-  if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+  if (clock) { s_clock_format = clamp_setting((int)clock->value->int32, CLOCK_SYSTEM, CLOCK_12H, CLOCK_SYSTEM); redraw = true; }
+  if (chevrons) { s_chevron_source = clamp_setting((int)chevrons->value->int32, CHEVRON_BATTERY, CHEVRON_STEPS, CHEVRON_BATTERY); redraw = true; }
+  if (layout) { s_bottom_layout = clamp_setting((int)layout->value->int32, LAYOUT_DATE_STEPS_WEATHER, LAYOUT_DATE_STEPS_BATTERY, LAYOUT_DATE_STEPS_WEATHER); redraw = true; }
+  if (accent) { s_accent_color = clamp_setting((int)accent->value->int32, ACCENT_RED, ACCENT_CYAN, ACCENT_RED); redraw = true; }
+
+  if (temp && temp->type == TUPLE_INT) {
+    s_temperature = (int)temp->value->int32;
+    s_weather_valid = true;
+    redraw = true;
+  }
+  if (icon && icon->type == TUPLE_CSTRING) {
+    strncpy(s_weather_icon, icon->value->cstring, sizeof(s_weather_icon) - 1);
+    s_weather_icon[sizeof(s_weather_icon) - 1] = '\0';
+    s_weather_valid = true;
+    redraw = true;
+  }
+
+  if (clock || chevrons || layout || accent) {
+    save_settings();
+  }
+
+  if (redraw) {
+    update_time();
+    update_battery_text();
+    if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+  }
 }
 
 static void battery_handler(BatteryChargeState state) {
@@ -437,6 +517,15 @@ static void battery_handler(BatteryChargeState state) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time();
   if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+
+  if (tick_time->tm_min % 30 == 0) {
+    DictionaryIterator *iter;
+    AppMessageResult result = app_message_outbox_begin(&iter);
+    if (result == APP_MSG_OK) {
+      dict_write_uint8(iter, MESSAGE_KEY_REQUEST_WEATHER, 1);
+      app_message_outbox_send();
+    }
+  }
 }
 
 static void main_window_load(Window *window) {
