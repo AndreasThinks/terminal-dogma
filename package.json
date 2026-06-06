@@ -10,6 +10,7 @@
     "uuid": "44201a31-161f-4e94-ad74-24429abe073e",
     "sdkVersion": "3",
     "enableMultiJS": true,
+    "capabilities": ["configurable"],
     "targetPlatforms": ["emery"],
     "watchapp": {
       "watchface": true
