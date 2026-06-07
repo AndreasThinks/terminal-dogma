@@ -103,9 +103,6 @@ def draw_bio(draw, box=(152, 132, 44, 50), hr=76):
 
 def draw_sync(draw, y=178, pct=85):
     text(draw, (6, y - 1), "SYNC", RED, FONT_SMALL)
-    pct_text = f"{pct}%"
-    pct_bbox = draw.textbbox((0, 0), pct_text, font=FONT_SMALL)
-    draw.text((196 - (pct_bbox[2] - pct_bbox[0]), y - 1), pct_text, font=FONT_SMALL, fill=WHITE)
 
     bar_x, bar_y, block_w, block_h, gap, blocks = 48, y + 5, 7, 6, 2, 12
     lit_blocks = int((pct * blocks + 50) / 100)

@@ -379,10 +379,6 @@ static void draw_sync_ratio(GContext *ctx, int y) {
   /* System font labels: custom 1px pixel text can disappear in QEMU. */
   draw_text_box(ctx, "SYNC", GRect(6, y, 38, 14), s_font_chip_small, accent, GTextAlignmentLeft);
 
-  char pct_buf[6];
-  snprintf(pct_buf, sizeof(pct_buf), "%d%%", sync_pct);
-  draw_text_box(ctx, pct_buf, GRect(160, y, 36, 14), s_font_chip_small, GColorWhite, GTextAlignmentRight);
-
   /* Chunky 12-block rail. At Pebble scale, 26 micro-blocks read as noise. */
   const int bar_x = 48;
   const int bar_y = y + 5;
