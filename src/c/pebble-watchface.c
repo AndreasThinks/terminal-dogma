@@ -2,20 +2,14 @@
 
 #define SCREEN_W 200
 #define SCREEN_H 228
-#define BOTTOM_Y 192
-#define STEPS_GOAL 10000
-
+#define BOTTOM_Y 195
 #define SETTINGS_KEY_CLOCK_FORMAT 1001
-#define SETTINGS_KEY_CHEVRON_SOURCE 1002
 #define SETTINGS_KEY_BOTTOM_LAYOUT 1003
 #define SETTINGS_KEY_ACCENT_COLOR 1004
 
 #define CLOCK_SYSTEM 0
 #define CLOCK_24H 1
 #define CLOCK_12H 2
-
-#define CHEVRON_BATTERY 0
-#define CHEVRON_STEPS 1
 
 #define LAYOUT_DATE_STEPS_WEATHER 0
 #define LAYOUT_DATE_BATTERY_WEATHER 1
@@ -35,12 +29,9 @@ static GFont s_font_chip;
 static GFont s_font_chip_small;
 
 extern uint32_t MESSAGE_KEY_CLOCK_FORMAT;
-extern uint32_t MESSAGE_KEY_CHEVRON_SOURCE;
 extern uint32_t MESSAGE_KEY_BOTTOM_LAYOUT;
 extern uint32_t MESSAGE_KEY_ACCENT_COLOR;
 extern uint32_t MESSAGE_KEY_TEMPERATURE;
-extern uint32_t MESSAGE_KEY_CONDITIONS;
-extern uint32_t MESSAGE_KEY_WEATHER_ICON;
 extern uint32_t MESSAGE_KEY_REQUEST_WEATHER;
 
 static char s_time_text[8];
@@ -52,13 +43,14 @@ static int s_steps_count = 7061;
 static int s_heart_rate = 72;
 
 static int s_temperature = 18;
-static char s_weather_icon[8] = "SUN";
 static bool s_weather_valid = false;
+static time_t s_last_weather_time = 0;
 
 static int s_clock_format = CLOCK_SYSTEM;
-static int s_chevron_source = CHEVRON_BATTERY;
 static int s_bottom_layout = LAYOUT_DATE_STEPS_WEATHER;
 static int s_accent_color = ACCENT_RED;
+static Layer *s_window_layer;
+static bool s_is_obstructed;
 
 static GColor color_red(void) { return GColorFromHEX(0xFF2424); }
 static GColor color_amber(void) { return GColorFromHEX(0xFFAA00); }
@@ -85,11 +77,6 @@ static void draw_text_box(GContext *ctx, const char *text, GRect box, GFont font
                      align, NULL);
 }
 
-static void draw_outline_chip(GContext *ctx, GRect r, GColor color) {
-  graphics_context_set_stroke_color(ctx, color);
-  graphics_context_set_stroke_width(ctx, 2);
-  graphics_draw_round_rect(ctx, r, 5);
-}
 
 static uint8_t glyph_row(char c, int row) {
   const uint8_t blank[5] = {0, 0, 0, 0, 0};
@@ -183,12 +170,6 @@ static void fill_polygon_at(GContext *ctx, GPoint origin, GPoint *points, int co
 }
 
 static int chevron_percent(void) {
-  if (s_chevron_source == CHEVRON_STEPS) {
-    int pct = (s_steps_count * 100) / STEPS_GOAL;
-    if (pct > 100) pct = 100;
-    if (pct < 0) pct = 0;
-    return pct;
-  }
   return s_battery_pct;
 }
 
@@ -251,110 +232,6 @@ static void draw_l_series(GContext *ctx) {
   }
 }
 
-static void draw_sun_icon(GContext *ctx, GPoint c, int r, GColor color) {
-  graphics_context_set_fill_color(ctx, color);
-  graphics_context_set_stroke_color(ctx, color);
-  graphics_fill_circle(ctx, c, r);
-  for (int i = 0; i < 8; i++) {
-    int32_t angle = DEG_TO_TRIGANGLE(i * 45);
-    int x1 = c.x + (cos_lookup(angle) * (r + 2)) / TRIG_MAX_RATIO;
-    int y1 = c.y + (sin_lookup(angle) * (r + 2)) / TRIG_MAX_RATIO;
-    int x2 = c.x + (cos_lookup(angle) * (r + 6)) / TRIG_MAX_RATIO;
-    int y2 = c.y + (sin_lookup(angle) * (r + 6)) / TRIG_MAX_RATIO;
-    graphics_draw_line(ctx, GPoint(x1, y1), GPoint(x2, y2));
-  }
-}
-
-static void draw_cloud_icon(GContext *ctx, GPoint c, int r, GColor color) {
-  graphics_context_set_fill_color(ctx, color);
-  int cx = c.x, cy = c.y;
-  graphics_fill_rect(ctx, GRect(cx - r, cy, r * 2, r / 2 + 1), 99, GCornersAll);
-  graphics_fill_circle(ctx, GPoint(cx - r / 2, cy - 1), r / 2 + 1);
-  graphics_fill_circle(ctx, GPoint(cx + r / 3, cy - r / 3), r / 2 + 2);
-}
-
-static void draw_rain_icon(GContext *ctx, GPoint c, int r, GColor color) {
-  draw_cloud_icon(ctx, c, r, color);
-  graphics_context_set_fill_color(ctx, color);
-  for (int i = 0; i < 3; i++) {
-    graphics_fill_rect(ctx, GRect(c.x - r + 2 + i * (r * 2 / 3), c.y + r, 1, r / 2), 0, GCornerNone);
-  }
-}
-
-static void draw_snow_icon(GContext *ctx, GPoint c, int r, GColor color) {
-  draw_cloud_icon(ctx, c, r, color);
-  graphics_context_set_fill_color(ctx, color);
-  for (int i = 0; i < 3; i++) {
-    graphics_fill_circle(ctx, GPoint(c.x - r + 2 + i * (r * 2 / 3), c.y + r + 1), 1);
-  }
-}
-
-static void draw_weather_icon(GContext *ctx, GPoint c, int r, GColor color, const char *icon) {
-  if (!icon) { draw_sun_icon(ctx, c, r, color); return; }
-
-  if (strcmp(icon, "SUN") == 0) {
-    draw_sun_icon(ctx, c, r, color);
-  } else if (strcmp(icon, "CLOUD") == 0 || strcmp(icon, "FOG") == 0) {
-    draw_cloud_icon(ctx, c, r, color);
-  } else if (strcmp(icon, "RAIN") == 0) {
-    draw_rain_icon(ctx, c, r, color);
-  } else if (strcmp(icon, "SNOW") == 0) {
-    draw_snow_icon(ctx, c, r, color);
-  } else if (strcmp(icon, "TSTORM") == 0) {
-    draw_rain_icon(ctx, c, r, color);
-    graphics_context_set_fill_color(ctx, color_yellow());
-    int32_t sangle = DEG_TO_TRIGANGLE(45);
-    int sx = c.x + (cos_lookup(sangle) * (r + 3)) / TRIG_MAX_RATIO;
-    int sy = c.y + (sin_lookup(sangle) * (r + 3)) / TRIG_MAX_RATIO;
-    graphics_fill_rect(ctx, GRect(sx - 1, sy - 3, 2, 4), 0, GCornerNone);
-  } else {
-    draw_sun_icon(ctx, c, r, color);
-  }
-}
-
-typedef enum {
-  CHIP_DATE = 0,
-  CHIP_STEPS = 1,
-  CHIP_WEATHER = 2,
-  CHIP_BATTERY = 3
-} ChipKind;
-
-static void chip_kv(GContext *ctx, GRect r, const char *label, const char *value, GColor color) {
-  draw_outline_chip(ctx, r, color);
-  draw_tiny_centered(ctx, label, GRect(r.origin.x, r.origin.y + 3, r.size.w, 6), 1, color);
-  draw_text_box(ctx, value, GRect(r.origin.x + 1, r.origin.y + 8, r.size.w - 2, 16),
-                s_font_chip_small, color, GTextAlignmentCenter);
-}
-
-static void draw_chip(GContext *ctx, GRect r, ChipKind kind) {
-  switch (kind) {
-    case CHIP_DATE:
-      draw_outline_chip(ctx, r, color_pink());
-      draw_text_box(ctx, s_date_text, GRect(r.origin.x + 2, r.origin.y + 4, r.size.w - 4, 16),
-                    s_font_chip_small, color_pink(), GTextAlignmentCenter);
-      break;
-    case CHIP_STEPS:
-      chip_kv(ctx, r, "STEPS", s_steps_text, color_yellow());
-      break;
-    case CHIP_BATTERY:
-      chip_kv(ctx, r, "BATT", s_battery_text, accent_color());
-      break;
-    case CHIP_WEATHER:
-    default:
-      draw_outline_chip(ctx, r, color_cyan());
-      draw_weather_icon(ctx, GPoint(r.origin.x + 14, r.origin.y + 12), 3, color_cyan(), s_weather_icon);
-      {
-        char temp_buf[4];
-        snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
-        draw_text_box(ctx, temp_buf, GRect(r.origin.x + 19, r.origin.y + 4, 19, 16),
-                      s_font_chip, color_cyan(), GTextAlignmentCenter);
-        graphics_context_set_stroke_color(ctx, color_cyan());
-        graphics_draw_circle(ctx, GPoint(r.origin.x + 38, r.origin.y + 7), 2);
-      }
-      break;
-  }
-}
-
 static void draw_heart_icon(GContext *ctx, GPoint c, int r, GColor color) {
   graphics_context_set_fill_color(ctx, color);
   graphics_fill_circle(ctx, GPoint(c.x - 3, c.y - 1), 3);
@@ -365,8 +242,7 @@ static void draw_heart_icon(GContext *ctx, GPoint c, int r, GColor color) {
   if (path) { gpath_move_to(path, GPoint(0, 0)); gpath_draw_filled(ctx, path); gpath_destroy(path); }
 }
 
-static void draw_bio_mon(GContext *ctx) {
-  GRect box = GRect(152, 132, 44, 50);
+static void draw_bio_mon(GContext *ctx, GRect box) {
   GColor accent = accent_color();
   graphics_context_set_stroke_color(ctx, accent);
   graphics_context_set_stroke_width(ctx, 1);
@@ -449,10 +325,14 @@ static void draw_bottom_panel(GContext *ctx) {
       draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), false);
       draw_panel_column(ctx, c2, "BATT", s_battery_text, accent, false);
       {
-        char temp_buf[4];
-        snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
         char weather_buf[16];
-        snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
+        if (s_weather_valid) {
+          char temp_buf[4];
+          snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
+          snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
+        } else {
+          snprintf(weather_buf, sizeof(weather_buf), "--\u00B0");
+        }
         draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
@@ -466,13 +346,64 @@ static void draw_bottom_panel(GContext *ctx) {
       draw_panel_column(ctx, c1, "DATE", s_date_text, color_pink(), false);
       draw_panel_column(ctx, c2, "STEPS", s_steps_text, color_yellow(), false);
       {
-        char temp_buf[4];
-        snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
         char weather_buf[16];
-        snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
+        if (s_weather_valid) {
+          char temp_buf[4];
+          snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
+          snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
+        } else {
+          snprintf(weather_buf, sizeof(weather_buf), "--\u00B0");
+        }
         draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
+  }
+}
+
+#define SYNC_RATIO_MAX_AGE_SECS 1800
+
+static void draw_sync_ratio(GContext *ctx, int y) {
+  GColor accent = accent_color();
+
+  /* Compute freshness percentage */
+  int sync_pct = 0;
+  if (s_last_weather_time > 0) {
+    int elapsed = (int)(time(NULL) - s_last_weather_time);
+    if (elapsed < SYNC_RATIO_MAX_AGE_SECS) {
+      sync_pct = 100 - (elapsed * 100 / SYNC_RATIO_MAX_AGE_SECS);
+      if (sync_pct > 100) sync_pct = 100;
+      if (sync_pct < 0)   sync_pct = 0;
+    }
+  }
+
+  /* System font labels: custom 1px pixel text can disappear in QEMU. */
+  draw_text_box(ctx, "SYNC", GRect(6, y, 38, 14), s_font_chip_small, accent, GTextAlignmentLeft);
+
+  char pct_buf[6];
+  snprintf(pct_buf, sizeof(pct_buf), "%d%%", sync_pct);
+  draw_text_box(ctx, pct_buf, GRect(160, y, 36, 14), s_font_chip_small, GColorWhite, GTextAlignmentRight);
+
+  /* Chunky 12-block rail. At Pebble scale, 26 micro-blocks read as noise. */
+  const int bar_x = 48;
+  const int bar_y = y + 5;
+  const int block_w = 7;
+  const int block_h = 6;
+  const int gap = 2;
+  const int blocks = 12;
+  const int lit_blocks = (sync_pct * blocks + 50) / 100;
+
+  graphics_context_set_stroke_width(ctx, 1);
+  for (int i = 0; i < blocks; i++) {
+    int bx = bar_x + i * (block_w + gap);
+    bool lit = i < lit_blocks;
+
+    graphics_context_set_stroke_color(ctx, accent);
+    graphics_draw_rect(ctx, GRect(bx, bar_y, block_w, block_h));
+
+    if (lit) {
+      graphics_context_set_fill_color(ctx, accent);
+      graphics_fill_rect(ctx, GRect(bx + 1, bar_y + 1, block_w - 2, block_h - 2), 0, GCornerNone);
+    }
   }
 }
 
@@ -481,8 +412,8 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, bounds, 0, GCornerNone);
 
-  /* top-left corner label */
-  draw_text_box(ctx, "MAGI SYS", GRect(4, 0, 100, 14), s_font_chip_small, accent_color(), GTextAlignmentLeft);
+  /* compact corner tags, kept subordinate to the logo and metrics */
+  draw_text_box(ctx, "MAGI", GRect(4, 1, 44, 12), s_font_chip_small, accent_color(), GTextAlignmentLeft);
 
   if (s_logo_bitmap) {
     graphics_context_set_compositing_mode(ctx, GCompOpSet);
@@ -491,28 +422,29 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
     draw_text_box(ctx, "NERV", GRect(8, 38, 88, 28), s_font_chip, color_red(), GTextAlignmentCenter);
   }
 
-  /* top-right corner label */
-  draw_text_box(ctx, "INTERNAL PWR", GRect(110, 0, 90, 14), s_font_chip_small, GColorWhite, GTextAlignmentCenter);
+  draw_text_box(ctx, "PWR", GRect(154, 1, 42, 12), s_font_chip_small, accent_color(), GTextAlignmentRight);
 
   GColor accent = accent_color();
   graphics_context_set_stroke_color(ctx, accent);
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(110, 12), GPoint(110, 118));
+  graphics_draw_line(ctx, GPoint(110, 17), GPoint(110, 118));
 
   draw_l_series(ctx);
 
   graphics_draw_line(ctx, GPoint(4, 118), GPoint(196, 118));
 
-  draw_tiny_text(ctx, "LOCAL TIME // ACTIVE", 9, 122, 1, color_grey());
-  draw_text_box(ctx, s_time_text, GRect(0, 128, 150, 56),
+  draw_tiny_text(ctx, "LOCAL TIME // ACTIVE", 9, s_is_obstructed ? 116 : 118, 1, color_grey());
+  draw_text_box(ctx, s_time_text, GRect(0, s_is_obstructed ? 120 : 123, 150, 52),
                 s_font_time, GColorWhite, GTextAlignmentCenter);
 
-  draw_bio_mon(ctx);
+  draw_bio_mon(ctx, s_is_obstructed ? GRect(152, 118, 44, 44) : GRect(152, 126, 44, 48));
 
-  graphics_draw_line(ctx, GPoint(4, 188), GPoint(196, 188));
-
-  draw_bottom_panel(ctx);
-
+  if (!s_is_obstructed) {
+    draw_sync_ratio(ctx, 178);
+    graphics_context_set_stroke_color(ctx, accent);
+    graphics_draw_line(ctx, GPoint(4, 194), GPoint(bounds.size.w - 4, 194));
+    draw_bottom_panel(ctx);
+  }
 
 }
 
@@ -553,7 +485,12 @@ static void update_time(void) {
     snprintf(s_time_text, sizeof(s_time_text), "%d:%02d", hour, tick_time->tm_min);
   }
 
-  strftime(s_date_text, sizeof(s_date_text), "%a %d %b", tick_time);
+  strftime(s_date_text, sizeof(s_date_text), "%b %d", tick_time);
+  for (int i = 0; s_date_text[i]; i++) {
+    if (s_date_text[i] >= 'a' && s_date_text[i] <= 'z') {
+      s_date_text[i] -= 32;
+    }
+  }
   update_steps();
 }
 
@@ -570,7 +507,6 @@ static void update_heart_rate(void) {
 
 static void save_settings(void) {
   persist_write_int(SETTINGS_KEY_CLOCK_FORMAT, s_clock_format);
-  persist_write_int(SETTINGS_KEY_CHEVRON_SOURCE, s_chevron_source);
   persist_write_int(SETTINGS_KEY_BOTTOM_LAYOUT, s_bottom_layout);
   persist_write_int(SETTINGS_KEY_ACCENT_COLOR, s_accent_color);
 }
@@ -581,44 +517,33 @@ static int clamp_setting(int value, int min, int max, int fallback) {
 
 static void load_settings(void) {
   s_clock_format = persist_exists(SETTINGS_KEY_CLOCK_FORMAT) ? persist_read_int(SETTINGS_KEY_CLOCK_FORMAT) : CLOCK_SYSTEM;
-  s_chevron_source = persist_exists(SETTINGS_KEY_CHEVRON_SOURCE) ? persist_read_int(SETTINGS_KEY_CHEVRON_SOURCE) : CHEVRON_BATTERY;
   s_bottom_layout = persist_exists(SETTINGS_KEY_BOTTOM_LAYOUT) ? persist_read_int(SETTINGS_KEY_BOTTOM_LAYOUT) : LAYOUT_DATE_STEPS_WEATHER;
   s_accent_color = persist_exists(SETTINGS_KEY_ACCENT_COLOR) ? persist_read_int(SETTINGS_KEY_ACCENT_COLOR) : ACCENT_RED;
 
   s_clock_format = clamp_setting(s_clock_format, CLOCK_SYSTEM, CLOCK_12H, CLOCK_SYSTEM);
-  s_chevron_source = clamp_setting(s_chevron_source, CHEVRON_BATTERY, CHEVRON_STEPS, CHEVRON_BATTERY);
   s_bottom_layout = clamp_setting(s_bottom_layout, LAYOUT_DATE_STEPS_WEATHER, LAYOUT_DATE_STEPS_BATTERY, LAYOUT_DATE_STEPS_WEATHER);
   s_accent_color = clamp_setting(s_accent_color, ACCENT_RED, ACCENT_CYAN, ACCENT_RED);
 }
 
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
   Tuple *clock = dict_find(iterator, MESSAGE_KEY_CLOCK_FORMAT);
-  Tuple *chevrons = dict_find(iterator, MESSAGE_KEY_CHEVRON_SOURCE);
   Tuple *layout = dict_find(iterator, MESSAGE_KEY_BOTTOM_LAYOUT);
   Tuple *accent = dict_find(iterator, MESSAGE_KEY_ACCENT_COLOR);
   Tuple *temp = dict_find(iterator, MESSAGE_KEY_TEMPERATURE);
-  Tuple *icon = dict_find(iterator, MESSAGE_KEY_WEATHER_ICON);
 
   bool redraw = false;
 
   if (clock) { s_clock_format = clamp_setting((int)clock->value->int32, CLOCK_SYSTEM, CLOCK_12H, CLOCK_SYSTEM); redraw = true; }
-  if (chevrons) { s_chevron_source = clamp_setting((int)chevrons->value->int32, CHEVRON_BATTERY, CHEVRON_STEPS, CHEVRON_BATTERY); redraw = true; }
   if (layout) { s_bottom_layout = clamp_setting((int)layout->value->int32, LAYOUT_DATE_STEPS_WEATHER, LAYOUT_DATE_STEPS_BATTERY, LAYOUT_DATE_STEPS_WEATHER); redraw = true; }
   if (accent) { s_accent_color = clamp_setting((int)accent->value->int32, ACCENT_RED, ACCENT_CYAN, ACCENT_RED); redraw = true; }
 
   if (temp && temp->type == TUPLE_INT) {
     s_temperature = (int)temp->value->int32;
     s_weather_valid = true;
+    s_last_weather_time = time(NULL);
     redraw = true;
   }
-  if (icon && icon->type == TUPLE_CSTRING) {
-    strncpy(s_weather_icon, icon->value->cstring, sizeof(s_weather_icon) - 1);
-    s_weather_icon[sizeof(s_weather_icon) - 1] = '\0';
-    s_weather_valid = true;
-    redraw = true;
-  }
-
-  if (clock || chevrons || layout || accent) {
+  if (clock || layout || accent) {
     save_settings();
   }
 
@@ -632,6 +557,22 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 static void battery_handler(BatteryChargeState state) {
   s_battery_pct = state.charge_percent;
   update_battery_text();
+  if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+}
+
+static void prv_unobstructed_will_change(GRect final_unobstructed_screen_area, void *context) {
+  GRect full_bounds = layer_get_bounds(s_window_layer);
+  s_is_obstructed = !grect_equal(&full_bounds, &final_unobstructed_screen_area);
+}
+
+static void prv_unobstructed_change(AnimationProgress progress, void *context) {
+  if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
+}
+
+static void prv_unobstructed_did_change(void *context) {
+  GRect full_bounds = layer_get_bounds(s_window_layer);
+  GRect unobstructed = layer_get_unobstructed_bounds(s_window_layer);
+  s_is_obstructed = !grect_equal(&full_bounds, &unobstructed);
   if (s_canvas_layer) layer_mark_dirty(s_canvas_layer);
 }
 
@@ -653,6 +594,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
 static void main_window_load(Window *window) {
   Layer *window_layer = window_get_root_layer(window);
   GRect bounds = layer_get_bounds(window_layer);
+  s_window_layer = window_layer;
 
   s_font_time = fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS);
   s_font_chip = fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD);
@@ -667,6 +609,17 @@ static void main_window_load(Window *window) {
   s_battery_pct = battery_state_service_peek().charge_percent;
   update_battery_text();
   update_time();
+
+  /* Check initial obstruction state and subscribe to UnobstructedArea */
+  GRect full = layer_get_bounds(s_window_layer);
+  GRect unobstructed = layer_get_unobstructed_bounds(s_window_layer);
+  s_is_obstructed = !grect_equal(&full, &unobstructed);
+  UnobstructedAreaHandlers handlers = {
+    .will_change = prv_unobstructed_will_change,
+    .change = prv_unobstructed_change,
+    .did_change = prv_unobstructed_did_change
+  };
+  unobstructed_area_service_subscribe(handlers, NULL);
 }
 
 static void main_window_unload(Window *window) {

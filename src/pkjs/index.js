@@ -2,7 +2,6 @@ var SETTINGS_KEY = 'nerv-watchface-settings-v1';
 
 var DEFAULTS = {
   CLOCK_FORMAT: 0,
-  CHEVRON_SOURCE: 0,
   BOTTOM_LAYOUT: 0,
   ACCENT_COLOR: 0
 };
@@ -39,7 +38,7 @@ function sendSettings(settings) {
 function fetchWeather(lat, lon) {
   var url = OPEN_METEO_URL + '?latitude=' + lat +
     '&longitude=' + lon +
-    '&current=temperature_2m,weather_code';
+    '&current=temperature_2m';
 
   var req = new XMLHttpRequest();
   req.open('GET', url, true);
@@ -53,17 +52,11 @@ function fetchWeather(lat, lon) {
       if (!data || !data.current) return;
 
       var temp = Math.round(data.current.temperature_2m);
-      var code = data.current.weather_code;
-      var condition = weatherCodeToCondition(code);
-      var icon = weatherCodeToIcon(code);
-
       var msg = {};
       msg.TEMPERATURE = temp;
-      msg.CONDITIONS = condition;
-      msg.WEATHER_ICON = icon;
 
       Pebble.sendAppMessage(msg, function() {
-        console.log('Weather sent: ' + temp + '\u00B0C ' + condition + ' (' + icon + ')');
+        console.log('Weather sent: ' + temp + '\u00B0C');
       }, function(e) {
         console.log('Weather send failed: ' + JSON.stringify(e));
       });
@@ -75,30 +68,6 @@ function fetchWeather(lat, lon) {
     console.log('Open-Meteo network error');
   };
   req.send();
-}
-
-function weatherCodeToCondition(code) {
-  if (code === 0) return 'Clear';
-  if (code >= 1 && code <= 3) return 'Partly Cloudy';
-  if (code === 45 || code === 48) return 'Fog';
-  if (code >= 51 && code <= 55) return 'Drizzle';
-  if (code >= 61 && code <= 65) return 'Rain';
-  if (code >= 71 && code <= 77) return 'Snow';
-  if (code >= 80 && code <= 82) return 'Showers';
-  if (code >= 95 && code <= 99) return 'T-Storm';
-  return 'Cloudy';
-}
-
-function weatherCodeToIcon(code) {
-  if (code === 0) return 'SUN';
-  if (code >= 1 && code <= 3) return 'CLOUD';
-  if (code === 45 || code === 48) return 'FOG';
-  if (code >= 51 && code <= 55) return 'RAIN';
-  if (code >= 61 && code <= 65) return 'RAIN';
-  if (code >= 71 && code <= 77) return 'SNOW';
-  if (code >= 80 && code <= 82) return 'RAIN';
-  if (code >= 95 && code <= 99) return 'TSTORM';
-  return 'CLOUD';
 }
 
 function option(value, label, selected) {
@@ -122,9 +91,6 @@ function buildConfigHtml(settings) {
     '<label>Clock format</label><select id="CLOCK_FORMAT">' +
       option(0, 'System default', settings.CLOCK_FORMAT) + option(1, '24 hour', settings.CLOCK_FORMAT) + option(2, '12 hour', settings.CLOCK_FORMAT) +
     '</select>' +
-    '<label>Chevron source</label><select id="CHEVRON_SOURCE">' +
-      option(0, 'Battery level', settings.CHEVRON_SOURCE) + option(1, 'Steps progress', settings.CHEVRON_SOURCE) +
-    '</select>' +
     '<label>Bottom modules</label><select id="BOTTOM_LAYOUT">' +
       option(0, 'Date | Steps | Weather', settings.BOTTOM_LAYOUT) + option(1, 'Date | Battery | Weather', settings.BOTTOM_LAYOUT) + option(2, 'Date | Steps | Battery', settings.BOTTOM_LAYOUT) +
     '</select>' +
@@ -134,7 +100,7 @@ function buildConfigHtml(settings) {
     '<button id="save">Save</button>' +
     '<div class="note">Weather fetches live from Open-Meteo using GPS. Logo stays NERV red.</div>' +
     '</div><script>' +
-    'document.getElementById("save").onclick=function(){var s={};["CLOCK_FORMAT","CHEVRON_SOURCE","BOTTOM_LAYOUT","ACCENT_COLOR"].forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(s));};' +
+    'document.getElementById("save").onclick=function(){var s={};["CLOCK_FORMAT","BOTTOM_LAYOUT","ACCENT_COLOR"].forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(s));};' +
     '</script></body></html>';
 }
 
