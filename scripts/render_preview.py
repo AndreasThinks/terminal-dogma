@@ -105,12 +105,25 @@ def draw_sync(draw, y=178, pct=85):
     text(draw, (6, y - 1), "SYNC", RED, FONT_SMALL)
 
     bar_x, bar_y, block_w, block_h, gap, blocks = 48, y + 5, 6, 6, 2, 18
+    slant = 3  # tan(25°) * 6px ≈ 2.8px, rounded for integer pixels
     lit_blocks = int((pct * blocks + 50) / 100)
     for i in range(blocks):
         bx = bar_x + i * (block_w + gap)
-        draw.rectangle([bx, bar_y, bx + block_w, bar_y + block_h], outline=RED)
+        outline = [
+            (bx + slant, bar_y),
+            (bx + block_w + slant, bar_y),
+            (bx + block_w, bar_y + block_h),
+            (bx, bar_y + block_h),
+        ]
+        draw.line(outline + [outline[0]], fill=RED, width=1)
         if i < lit_blocks:
-            draw.rectangle([bx + 1, bar_y + 1, bx + block_w - 1, bar_y + block_h - 1], fill=RED)
+            inner = [
+                (bx + slant, bar_y + 1),
+                (bx + block_w + slant - 1, bar_y + 1),
+                (bx + block_w - 1, bar_y + block_h - 1),
+                (bx + 1, bar_y + block_h - 1),
+            ]
+            draw.polygon(inner, fill=RED)
 
 
 def draw_hazard(draw, x, y, s=5):

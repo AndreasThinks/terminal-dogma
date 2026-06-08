@@ -379,26 +379,41 @@ static void draw_sync_ratio(GContext *ctx, int y) {
   /* System font labels: custom 1px pixel text can disappear in QEMU. */
   draw_text_box(ctx, "SYNC", GRect(6, y, 38, 14), s_font_chip_small, accent, GTextAlignmentLeft);
 
-  /* Long chunky rail. At Pebble scale, micro-blocks read as noise. */
+  /* 25-degree slanted pads: PCB-terminal texture without becoming hazard stripes. */
   const int bar_x = 48;
   const int bar_y = y + 5;
   const int block_w = 6;
   const int block_h = 6;
+  const int slant = 3; /* tan(25deg) * 6px ~= 2.8px */
   const int gap = 2;
   const int blocks = 18;
   const int lit_blocks = (sync_pct * blocks + 50) / 100;
 
   graphics_context_set_stroke_width(ctx, 1);
+  graphics_context_set_stroke_color(ctx, accent);
+  graphics_context_set_fill_color(ctx, accent);
+
   for (int i = 0; i < blocks; i++) {
     int bx = bar_x + i * (block_w + gap);
     bool lit = i < lit_blocks;
 
-    graphics_context_set_stroke_color(ctx, accent);
-    graphics_draw_rect(ctx, GRect(bx, bar_y, block_w, block_h));
+    GPoint top_left = GPoint(bx + slant, bar_y);
+    GPoint top_right = GPoint(bx + block_w + slant, bar_y);
+    GPoint bottom_right = GPoint(bx + block_w, bar_y + block_h);
+    GPoint bottom_left = GPoint(bx, bar_y + block_h);
+
+    graphics_draw_line(ctx, top_left, top_right);
+    graphics_draw_line(ctx, top_right, bottom_right);
+    graphics_draw_line(ctx, bottom_right, bottom_left);
+    graphics_draw_line(ctx, bottom_left, top_left);
 
     if (lit) {
-      graphics_context_set_fill_color(ctx, accent);
-      graphics_fill_rect(ctx, GRect(bx + 1, bar_y + 1, block_w - 2, block_h - 2), 0, GCornerNone);
+      for (int row = 1; row < block_h; row++) {
+        int offset = ((block_h - row) * slant + block_h / 2) / block_h;
+        graphics_draw_line(ctx,
+                           GPoint(bx + 1 + offset, bar_y + row),
+                           GPoint(bx + block_w - 1 + offset, bar_y + row));
+      }
     }
   }
 }
