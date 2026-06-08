@@ -171,8 +171,8 @@ def main():
     draw_l_series(draw)
     draw.line([(4, 118), (196, 118)], fill=RED)
 
-    text(draw, (9, 118), "LOCAL TIME // ACTIVE", WHITE, FONT_TINY)
-    centered(draw, (0, 121, 150, 54), "21:19", fill=WHITE, f=FONT_TIME)
+    text(draw, (9, 122), "LOCAL TIME // ACTIVE", WHITE, FONT_TINY)
+    centered(draw, (0, 125, 150, 54), "21:19", fill=WHITE, f=FONT_TIME)
     draw_bio(draw, box=(152, 126, 44, 48))
 
     draw_sync(draw, y=178, pct=85)

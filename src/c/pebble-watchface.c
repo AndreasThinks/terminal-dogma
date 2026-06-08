@@ -479,8 +479,8 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
 
   graphics_draw_line(ctx, GPoint(4, 118), GPoint(196, 118));
 
-  draw_tiny_text(ctx, "LOCAL TIME // ACTIVE", 9, s_is_obstructed ? 116 : 118, 1, color_grey());
-  draw_text_box(ctx, s_time_text, GRect(0, s_is_obstructed ? 120 : 123, 150, 52),
+  draw_tiny_text(ctx, "LOCAL TIME // ACTIVE", 9, s_is_obstructed ? 120 : 122, 1, color_grey());
+  draw_text_box(ctx, s_time_text, GRect(0, s_is_obstructed ? 124 : 127, 150, 52),
                 s_font_time, GColorWhite, GTextAlignmentCenter);
 
   draw_bio_mon(ctx, s_is_obstructed ? GRect(152, 118, 44, 44) : GRect(152, 126, 44, 48));
