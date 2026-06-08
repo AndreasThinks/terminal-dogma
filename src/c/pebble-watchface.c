@@ -6,6 +6,8 @@
 #define SETTINGS_KEY_CLOCK_FORMAT 1001
 #define SETTINGS_KEY_BOTTOM_LAYOUT 1003
 #define SETTINGS_KEY_ACCENT_COLOR 1004
+#define SETTINGS_KEY_TEMP_UNIT 1005
+#define SETTINGS_KEY_SYNC_SOURCE 1006
 
 #define CLOCK_SYSTEM 0
 #define CLOCK_24H 1
@@ -20,6 +22,16 @@
 #define ACCENT_GREEN 2
 #define ACCENT_CYAN 3
 
+#define TEMP_CELSIUS 0
+#define TEMP_FAHRENHEIT 1
+
+#define SYNC_SOURCE_FRESHNESS 0
+#define SYNC_SOURCE_STEPS 1
+#define SYNC_SOURCE_BATTERY 2
+#define SYNC_SOURCE_AESTHETIC 3
+
+#define STEPS_GOAL 10000
+
 static Window *s_main_window;
 static Layer *s_canvas_layer;
 static GBitmap *s_logo_bitmap;
@@ -31,6 +43,8 @@ static GFont s_font_chip_small;
 extern uint32_t MESSAGE_KEY_CLOCK_FORMAT;
 extern uint32_t MESSAGE_KEY_BOTTOM_LAYOUT;
 extern uint32_t MESSAGE_KEY_ACCENT_COLOR;
+extern uint32_t MESSAGE_KEY_TEMP_UNIT;
+extern uint32_t MESSAGE_KEY_SYNC_SOURCE;
 extern uint32_t MESSAGE_KEY_TEMPERATURE;
 extern uint32_t MESSAGE_KEY_REQUEST_WEATHER;
 
@@ -49,6 +63,8 @@ static time_t s_last_weather_time = 0;
 static int s_clock_format = CLOCK_SYSTEM;
 static int s_bottom_layout = LAYOUT_DATE_STEPS_WEATHER;
 static int s_accent_color = ACCENT_RED;
+static int s_temp_unit = TEMP_CELSIUS;
+static int s_sync_source = SYNC_SOURCE_FRESHNESS;
 static Layer *s_window_layer;
 static bool s_is_obstructed;
 
@@ -298,6 +314,21 @@ static void draw_panel_column(GContext *ctx, GRect r, const char *label, const c
   }
 }
 
+static void format_weather_text(char *buf, size_t buf_len) {
+  if (!s_weather_valid) {
+    snprintf(buf, buf_len, "--\u00B0");
+    return;
+  }
+
+  int temp = s_temperature;
+  if (s_temp_unit == TEMP_FAHRENHEIT) {
+    temp = ((s_temperature * 9) + (s_temperature >= 0 ? 2 : -2)) / 5 + 32;
+    snprintf(buf, buf_len, "%d\u00B0F", temp);
+  } else {
+    snprintf(buf, buf_len, "%d\u00B0C", temp);
+  }
+}
+
 static void draw_bottom_panel(GContext *ctx) {
   const int px = 4, py = BOTTOM_Y, pw = 192, ph = 30;
   GColor accent = accent_color();
@@ -316,7 +347,8 @@ static void draw_bottom_panel(GContext *ctx) {
   graphics_draw_line(ctx, GPoint(d1x, py + 2), GPoint(d1x, py + ph - 2));
   graphics_draw_line(ctx, GPoint(d2x, py + 2), GPoint(d2x, py + ph - 2));
 
-  GRect c1 = GRect(px + 2, py + 2, d1x - px - 2, ph - 4);
+  /* First column gets extra left inset: real Time2 rendering clipped DATE to ATE for one user. */
+  GRect c1 = GRect(px + 6, py + 2, d1x - px - 6, ph - 4);
   GRect c2 = GRect(d1x + 2, py + 2, d2x - d1x - 2, ph - 4);
   GRect c3 = GRect(d2x + 2, py + 2, px + pw - d2x - 2, ph - 4);
 
@@ -326,13 +358,7 @@ static void draw_bottom_panel(GContext *ctx) {
       draw_panel_column(ctx, c2, "BATT", s_battery_text, accent, false);
       {
         char weather_buf[16];
-        if (s_weather_valid) {
-          char temp_buf[4];
-          snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
-          snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
-        } else {
-          snprintf(weather_buf, sizeof(weather_buf), "--\u00B0");
-        }
+        format_weather_text(weather_buf, sizeof(weather_buf));
         draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
@@ -347,13 +373,7 @@ static void draw_bottom_panel(GContext *ctx) {
       draw_panel_column(ctx, c2, "STEPS", s_steps_text, color_yellow(), false);
       {
         char weather_buf[16];
-        if (s_weather_valid) {
-          char temp_buf[4];
-          snprintf(temp_buf, sizeof(temp_buf), "%d", s_temperature);
-          snprintf(weather_buf, sizeof(weather_buf), "%s\u00B0", temp_buf);
-        } else {
-          snprintf(weather_buf, sizeof(weather_buf), "--\u00B0");
-        }
+        format_weather_text(weather_buf, sizeof(weather_buf));
         draw_panel_column(ctx, c3, "WEATHER", weather_buf, color_cyan(), false);
       }
       break;
@@ -362,19 +382,33 @@ static void draw_bottom_panel(GContext *ctx) {
 
 #define SYNC_RATIO_MAX_AGE_SECS 1800
 
+static int sync_source_percent(void) {
+  switch (s_sync_source) {
+    case SYNC_SOURCE_STEPS:
+      return s_steps_count >= STEPS_GOAL ? 100 : (s_steps_count * 100) / STEPS_GOAL;
+    case SYNC_SOURCE_BATTERY:
+      return s_battery_pct;
+    case SYNC_SOURCE_AESTHETIC:
+      return 85;
+    case SYNC_SOURCE_FRESHNESS:
+    default:
+      if (s_last_weather_time > 0) {
+        int elapsed = (int)(time(NULL) - s_last_weather_time);
+        if (elapsed < SYNC_RATIO_MAX_AGE_SECS) {
+          int pct = 100 - (elapsed * 100 / SYNC_RATIO_MAX_AGE_SECS);
+          if (pct > 100) return 100;
+          if (pct < 0) return 0;
+          return pct;
+        }
+      }
+      return 0;
+  }
+}
+
 static void draw_sync_ratio(GContext *ctx, int y) {
   GColor accent = accent_color();
 
-  /* Compute freshness percentage */
-  int sync_pct = 0;
-  if (s_last_weather_time > 0) {
-    int elapsed = (int)(time(NULL) - s_last_weather_time);
-    if (elapsed < SYNC_RATIO_MAX_AGE_SECS) {
-      sync_pct = 100 - (elapsed * 100 / SYNC_RATIO_MAX_AGE_SECS);
-      if (sync_pct > 100) sync_pct = 100;
-      if (sync_pct < 0)   sync_pct = 0;
-    }
-  }
+  int sync_pct = sync_source_percent();
 
   /* System font labels: custom 1px pixel text can disappear in QEMU. */
   draw_text_box(ctx, "SYNC", GRect(6, y, 38, 14), s_font_chip_small, accent, GTextAlignmentLeft);
@@ -520,6 +554,8 @@ static void save_settings(void) {
   persist_write_int(SETTINGS_KEY_CLOCK_FORMAT, s_clock_format);
   persist_write_int(SETTINGS_KEY_BOTTOM_LAYOUT, s_bottom_layout);
   persist_write_int(SETTINGS_KEY_ACCENT_COLOR, s_accent_color);
+  persist_write_int(SETTINGS_KEY_TEMP_UNIT, s_temp_unit);
+  persist_write_int(SETTINGS_KEY_SYNC_SOURCE, s_sync_source);
 }
 
 static int clamp_setting(int value, int min, int max, int fallback) {
@@ -530,16 +566,22 @@ static void load_settings(void) {
   s_clock_format = persist_exists(SETTINGS_KEY_CLOCK_FORMAT) ? persist_read_int(SETTINGS_KEY_CLOCK_FORMAT) : CLOCK_SYSTEM;
   s_bottom_layout = persist_exists(SETTINGS_KEY_BOTTOM_LAYOUT) ? persist_read_int(SETTINGS_KEY_BOTTOM_LAYOUT) : LAYOUT_DATE_STEPS_WEATHER;
   s_accent_color = persist_exists(SETTINGS_KEY_ACCENT_COLOR) ? persist_read_int(SETTINGS_KEY_ACCENT_COLOR) : ACCENT_RED;
+  s_temp_unit = persist_exists(SETTINGS_KEY_TEMP_UNIT) ? persist_read_int(SETTINGS_KEY_TEMP_UNIT) : TEMP_CELSIUS;
+  s_sync_source = persist_exists(SETTINGS_KEY_SYNC_SOURCE) ? persist_read_int(SETTINGS_KEY_SYNC_SOURCE) : SYNC_SOURCE_FRESHNESS;
 
   s_clock_format = clamp_setting(s_clock_format, CLOCK_SYSTEM, CLOCK_12H, CLOCK_SYSTEM);
   s_bottom_layout = clamp_setting(s_bottom_layout, LAYOUT_DATE_STEPS_WEATHER, LAYOUT_DATE_STEPS_BATTERY, LAYOUT_DATE_STEPS_WEATHER);
   s_accent_color = clamp_setting(s_accent_color, ACCENT_RED, ACCENT_CYAN, ACCENT_RED);
+  s_temp_unit = clamp_setting(s_temp_unit, TEMP_CELSIUS, TEMP_FAHRENHEIT, TEMP_CELSIUS);
+  s_sync_source = clamp_setting(s_sync_source, SYNC_SOURCE_FRESHNESS, SYNC_SOURCE_AESTHETIC, SYNC_SOURCE_FRESHNESS);
 }
 
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
   Tuple *clock = dict_find(iterator, MESSAGE_KEY_CLOCK_FORMAT);
   Tuple *layout = dict_find(iterator, MESSAGE_KEY_BOTTOM_LAYOUT);
   Tuple *accent = dict_find(iterator, MESSAGE_KEY_ACCENT_COLOR);
+  Tuple *temp_unit = dict_find(iterator, MESSAGE_KEY_TEMP_UNIT);
+  Tuple *sync_source = dict_find(iterator, MESSAGE_KEY_SYNC_SOURCE);
   Tuple *temp = dict_find(iterator, MESSAGE_KEY_TEMPERATURE);
 
   bool redraw = false;
@@ -547,6 +589,8 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
   if (clock) { s_clock_format = clamp_setting((int)clock->value->int32, CLOCK_SYSTEM, CLOCK_12H, CLOCK_SYSTEM); redraw = true; }
   if (layout) { s_bottom_layout = clamp_setting((int)layout->value->int32, LAYOUT_DATE_STEPS_WEATHER, LAYOUT_DATE_STEPS_BATTERY, LAYOUT_DATE_STEPS_WEATHER); redraw = true; }
   if (accent) { s_accent_color = clamp_setting((int)accent->value->int32, ACCENT_RED, ACCENT_CYAN, ACCENT_RED); redraw = true; }
+  if (temp_unit) { s_temp_unit = clamp_setting((int)temp_unit->value->int32, TEMP_CELSIUS, TEMP_FAHRENHEIT, TEMP_CELSIUS); redraw = true; }
+  if (sync_source) { s_sync_source = clamp_setting((int)sync_source->value->int32, SYNC_SOURCE_FRESHNESS, SYNC_SOURCE_AESTHETIC, SYNC_SOURCE_FRESHNESS); redraw = true; }
 
   if (temp && temp->type == TUPLE_INT) {
     s_temperature = (int)temp->value->int32;
@@ -554,7 +598,7 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     s_last_weather_time = time(NULL);
     redraw = true;
   }
-  if (clock || layout || accent) {
+  if (clock || layout || accent || temp_unit || sync_source) {
     save_settings();
   }
 

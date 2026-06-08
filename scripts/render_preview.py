@@ -132,7 +132,7 @@ def draw_hazard(draw, x, y, s=5):
             draw.point((x + col, y + row), fill=RED if (row + col) % 2 else WHITE)
 
 
-def draw_bottom_panel(draw, date="JUN 07", steps="8,471", temp="18°"):
+def draw_bottom_panel(draw, date="JUN 07", steps="8,471", temp="64°F"):
     px, py, pw, ph = 4, BOTTOM_Y, 192, 30
     draw.line([(px, py), (px + pw - 1, py)], fill=RED)
     draw.line([(px, py + 1), (px + pw - 1, py + 1)], fill=RED)
@@ -141,7 +141,7 @@ def draw_bottom_panel(draw, date="JUN 07", steps="8,471", temp="18°"):
     d1x, d2x = px + 72, px + 138
     draw.line([(d1x, py + 2), (d1x, py + ph - 2)], fill=RED)
     draw.line([(d2x, py + 2), (d2x, py + ph - 2)], fill=RED)
-    cols = [(px + 2, py + 2, d1x - px - 2, ph - 4, "DATE", date, PINK),
+    cols = [(px + 6, py + 2, d1x - px - 6, ph - 4, "DATE", date, PINK),
             (d1x + 2, py + 2, d2x - d1x - 2, ph - 4, "STEPS", steps, YELLOW),
             (d2x + 2, py + 2, px + pw - d2x - 2, ph - 4, "WEATHER", temp, CYAN)]
     for x, y, w, h, label, value, col in cols:

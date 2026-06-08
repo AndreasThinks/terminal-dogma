@@ -3,7 +3,9 @@ var SETTINGS_KEY = 'nerv-watchface-settings-v1';
 var DEFAULTS = {
   CLOCK_FORMAT: 0,
   BOTTOM_LAYOUT: 0,
-  ACCENT_COLOR: 0
+  ACCENT_COLOR: 0,
+  TEMP_UNIT: 0,
+  SYNC_SOURCE: 0
 };
 
 var OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
@@ -87,7 +89,7 @@ function buildConfigHtml(settings) {
     'button{width:100%;margin-top:22px;background:#ff2424;color:#000;border:0;border-radius:8px;padding:13px;font-weight:800;font-size:16px;text-transform:uppercase;}' +
     '.note{margin-top:12px;color:#777;font-size:12px;}' +
     '</style></head><body><div class="wrap">' +
-    '<h1>NERV WATCHFACE</h1><p>Configure display format and MAGI-style data modules.</p>' +
+    '<h1>NERV WATCHFACE</h1><p>Configure display format, MAGI-style modules, weather units, and the SYNC rail source.</p>' +
     '<label>Clock format</label><select id="CLOCK_FORMAT">' +
       option(0, 'System default', settings.CLOCK_FORMAT) + option(1, '24 hour', settings.CLOCK_FORMAT) + option(2, '12 hour', settings.CLOCK_FORMAT) +
     '</select>' +
@@ -97,10 +99,16 @@ function buildConfigHtml(settings) {
     '<label>HUD accent</label><select id="ACCENT_COLOR">' +
       option(0, 'NERV red', settings.ACCENT_COLOR) + option(1, 'Amber', settings.ACCENT_COLOR) + option(2, 'Green', settings.ACCENT_COLOR) + option(3, 'Cyan', settings.ACCENT_COLOR) +
     '</select>' +
+    '<label>Temperature unit</label><select id="TEMP_UNIT">' +
+      option(0, 'Celsius', settings.TEMP_UNIT) + option(1, 'Fahrenheit', settings.TEMP_UNIT) +
+    '</select>' +
+    '<label>SYNC rail source</label><select id="SYNC_SOURCE">' +
+      option(0, 'Data freshness', settings.SYNC_SOURCE) + option(1, 'Steps progress', settings.SYNC_SOURCE) + option(2, 'Battery level', settings.SYNC_SOURCE) + option(3, 'Aesthetic diagnostic', settings.SYNC_SOURCE) +
+    '</select>' +
     '<button id="save">Save</button>' +
-    '<div class="note">Weather fetches live from Open-Meteo using GPS. Logo stays NERV red.</div>' +
+    '<div class="note">Weather fetches live from Open-Meteo using GPS. SYNC can show data freshness, steps toward 10k, battery, or a fixed diagnostic state. Logo stays NERV red.</div>' +
     '</div><script>' +
-    'document.getElementById("save").onclick=function(){var s={};["CLOCK_FORMAT","BOTTOM_LAYOUT","ACCENT_COLOR"].forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(s));};' +
+    'document.getElementById("save").onclick=function(){var s={};["CLOCK_FORMAT","BOTTOM_LAYOUT","ACCENT_COLOR","TEMP_UNIT","SYNC_SOURCE"].forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});location.href="pebblejs://close#"+encodeURIComponent(JSON.stringify(s));};' +
     '</script></body></html>';
 }
 
