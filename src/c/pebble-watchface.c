@@ -100,6 +100,7 @@ static uint8_t glyph_row(char c, int row) {
   static const uint8_t A[5] = {2, 5, 7, 5, 5};
   static const uint8_t B[5] = {6, 5, 6, 5, 6};
   static const uint8_t C[5] = {7, 4, 4, 4, 7};
+  static const uint8_t D[5] = {6, 5, 5, 5, 6};
   static const uint8_t E[5] = {7, 4, 6, 4, 7};
   static const uint8_t H[5] = {5, 5, 7, 5, 5};
   static const uint8_t I[5] = {7, 2, 2, 2, 7};
@@ -128,7 +129,7 @@ static uint8_t glyph_row(char c, int row) {
 
   switch (c) {
     case 'A': g = A; break; case 'B': g = B; break; case 'C': g = C; break;
-    case 'E': g = E; break; case 'H': g = H; break; case 'I': g = I; break;
+    case 'D': g = D; break; case 'E': g = E; break; case 'H': g = H; break; case 'I': g = I; break;
     case 'L': g = L; break; case 'M': g = M; break; case 'O': g = O; break;
     case 'P': g = P; break; case 'R': g = R; break; case 'S': g = S; break;
     case 'T': g = T; break; case 'V': g = V; break; case 'W': g = W; break;
