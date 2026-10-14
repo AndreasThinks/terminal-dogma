@@ -1,8 +1,8 @@
 {
-  "name": "nerv-watchface",
+  "name": "terminal-dogma",
   "author": "Andreas Varotsis",
-  "version": "1.0.16",
-  "description": "Evangelion/NERV-inspired Pebble Time 2 watchface with configurable clock format, bottom modules, accent color, Celsius/Fahrenheit weather, and a configurable SYNC rail. SYNC can show phone/weather data freshness, steps toward 10k, battery level, or a fixed diagnostic state.",
+  "version": "1.0.17",
+  "description": "Evangelion/NERV-inspired Pebble Time 2 watchface: MAGI-style HUD with honest health, battery, phone-link and weather states, configurable modules, accent colour, Celsius/Fahrenheit weather, a configurable SYNC rail, and optional MAGI/system-boot transitions (Off/Subtle/Full).",
   "keywords": ["pebble-app", "watchface", "nerv"],
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
   "private": true,
   "dependencies": {},
   "pebble": {
-    "displayName": "NERV Watchface",
+    "displayName": "Terminal Dogma",
     "uuid": "44201a31-161f-4e94-ad74-24429abe073e",
     "sdkVersion": "3",
     "enableMultiJS": true,
@@ -27,7 +27,10 @@
       "TEMP_UNIT",
       "SYNC_SOURCE",
       "TEMPERATURE",
-      "REQUEST_WEATHER"
+      "REQUEST_WEATHER",
+      "ANIMATION",
+      "WEATHER_TIME",
+      "REQUEST_SETTINGS"
     ],
     "resources": {
       "media": [

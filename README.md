@@ -4,79 +4,99 @@ A NERV / Evangelion-inspired Pebble Time 2 watchface for **Emery** devices, 200�
 
 The face is built as a dense MAGI-style HUD: large readable time, NERV logo block, PWR chevrons, BIO monitor, configurable lower data modules, live weather, and a slanted SYNC rail.
 
-![Terminal Dogma Emery preview](emery_screenshot.png)
+![Terminal Dogma Emery screenshot](emery_screenshot.png)
 
 ## Features
 
 - Pebble Time 2 / Emery only.
-- Large system-font time display using `LECO_42_NUMBERS`.
+- Large system-font time display using `LECO_42_NUMBERS`. In 12-hour mode the label reads `LOCAL TIME // AM` or `PM`.
 - NERV logo asset and MAGI/PWR HUD framing.
-- Battery-backed PWR chevrons.
-- BIO monitor using current heart rate when available.
+- Battery: PWR chevrons plus a numeric tag in the top corner.
+  - `PWR 70%` is the normal state.
+  - `LOW 20%` turns yellow at 20% or less.
+  - At 10% or less it becomes an inverted red plate.
+  - `CHG 40%` shows while charging. `EXT 100%` shows when plugged in but not charging.
+- Phone link: the `MAGI` tag becomes `LINK LOST` while the Pebble app is disconnected.
+- Honest health data:
+  - BIO shows the firmware's filtered heart rate. The SDK guarantees it is at most 15 minutes old.
+  - BIO shows `--` when there is no reading. It never holds an old value.
+  - Steps show `--` when Health data is unavailable. No placeholder numbers are shown.
 - Configurable bottom modules:
   - Date | Steps | Weather
   - Date | Battery | Weather
   - Date | Steps | Battery
-- Live weather from Open-Meteo via phone GPS.
-- Weather unit setting:
-  - Celsius, e.g. `18°C`
-  - Fahrenheit, e.g. `64°F`
-- Configurable HUD accent color:
-  - NERV red
-  - Amber
-  - Green
-  - Cyan
+- Weather from Open-Meteo via the phone's location:
+  - The watch keeps the last reading and its observation time, so a relaunch does not blank it.
+  - After 60 minutes without an update it turns grey and is labelled `STALE`.
+  - After 6 hours it shows `--°`.
+- Weather unit setting: Celsius (`18°C`) or Fahrenheit (`64°F`).
+- Configurable HUD accent colour: NERV red, Amber, Green, Cyan.
 - Configurable SYNC rail source:
-  - **Data freshness:** fills after a successful phone/weather update and drains over 30 minutes.
-  - **Steps progress:** fills toward a 10,000-step daily goal.
-  - **Battery level:** mirrors watch battery percentage.
+  - **Data freshness:** fills after a successful weather update and drains over 30 minutes.
+  - **Steps progress:** fills toward a 10,000-step daily goal. It stays empty without Health data.
+  - **Battery level:** mirrors the watch battery percentage.
   - **Aesthetic diagnostic:** fixed at 85% for pure HUD flavour.
+- Transitions: **Off**, **Subtle** or **Full**, set in the settings page. Full is the default. Details are below.
 
-## What SYNC means
+## Transitions
 
-`SYNC` is a configurable system rail styled as a NERV sync-ratio meter. By default it shows external data freshness: a full rail means the watch recently received phone/weather data, while an empty rail means the data is stale or unavailable.
+The transitions combine two ideas: a NERV system boot and a MAGI consensus check. Both are drawn on the original face, and both end on it.
 
-Users can change it in settings to show step progress, battery level, or a fixed diagnostic state instead.
+- **Full launch sequence (about 1.8 s).** The HUD builds in stages. The time digits are visible from the first frame. The MAGI triad (BALTHASAR-2 / CASPER-3 / MELCHIOR-1) replaces the logo while three real checks resolve:
+  - PWR checks the battery.
+  - LINK checks the phone connection.
+  - DATA checks weather freshness.
+
+  Each check reads `PASS`, `LOW`, `LOST`, `OLD` or `NONE`. The corner tag reports the real tally (for example `MAGI 2/3`), then the logo powers back up. The sequence never waits for GPS and never claims everything is nominal when it is not.
+- **MAGI-only response (about 1.25 s).** Only the logo area changes. It is used for a launch in Subtle mode, for a launch at low battery or with Quick View showing, and for a real recovery.
+- **When animations play:**
+
+  | Event | What plays |
+  |---|---|
+  | Face shown | Full sequence, at most once every 30 minutes. The cooldown is persisted, so closing a notification or leaving an app does not replay it. |
+  | Phone link back after an outage of 1 minute or more | MAGI-only response |
+  | Weather goes from missing or stale to fresh | MAGI-only response |
+
+  - Recoveries are limited to one response per 5 minutes.
+  - A routine weather refresh (fresh to fresh) never animates.
+  - Nothing animates every minute, and there is no wrist-flick trigger.
+- **Skips and cancellation:**
+  - Battery at 10% or less (not charging): nothing plays.
+  - Battery at 20% or less: launch shortens to the MAGI-only response.
+  - Quick View: launch shortens to the MAGI-only response, and Quick View appearing during the full sequence cancels it.
+  - Changing the animation setting cancels any running sequence. Unloading the face cancels the timer.
+- **Off** starts no animation timers. No accelerometer service is ever subscribed.
+- **Frame budget:** one 66 ms app timer while a sequence runs. Each sequence is hard-capped at a fixed number of steps.
 
 ## Repository layout
 
 ```text
 package.json                  Pebble app metadata, capabilities, message keys
-src/c/pebble-watchface.c      Native watchface implementation
-src/pkjs/index.js             PebbleKit JS weather, settings UI, AppMessage bridge
+src/c/pebble-watchface.c      Native watchface: drawing, services, AppMessage
+src/c/td_logic.[ch]           Pure decision logic (settings, weather, health/power
+                              formatting, transition state machine); host-tested
+src/pkjs/index.js             PebbleKit JS entry point (wires phone.js to Pebble APIs)
+src/pkjs/phone.js             Weather fetch, settings page, serialised AppMessage queue
+tests/run.sh                  Host tests (C logic with cc, phone logic with node)
 resources/images/             NERV logo asset
-scripts/render_preview.py     Deterministic 200×228 preview renderer
-emery_screenshot.png          Current App Store screenshot
-preview_sync_ratio.png        Local deterministic preview output
+emery_screenshot.png          App Store screenshot (real Emery emulator framebuffer)
+CHANGELOG.md                  Release notes
+docs/TESTING.md               Test and emulator-capture procedure
 wscript                       Pebble SDK build config
 ```
 
-## Build
+## Build and test
 
 ```bash
-pebble build
+tests/run.sh      # host tests, needs cc and node
+pebble build      # writes build/<checkout-directory-name>.pbw
 ```
 
-The PBW is written to:
-
-```text
-build/pebble-watchface.pbw
-```
-
-## Preview
-
-The Emery emulator install/screenshot path is unreliable on this workstation, so layout verification uses a deterministic renderer that mirrors the C geometry closely enough for spacing checks.
-
-```bash
-uv run python scripts/render_preview.py
-cp preview_sync_ratio.png emery_screenshot.png
-```
-
-The preview is useful for layout, clipping, and screenshot generation. It is **not** font-perfect Pebble emulator output.
+See [docs/TESTING.md](docs/TESTING.md) for emulator capture and what is not covered.
 
 ## Publish
 
-Bump the version in `package.json`, build, regenerate `emery_screenshot.png`, then publish:
+Bump the version in `package.json` and build. Refresh `emery_screenshot.png` from a real emulator capture, then publish:
 
 ```bash
 pebble publish \
@@ -89,7 +109,7 @@ pebble publish \
 
 Notes:
 
-- Re-publishing the same version fails. Always bump the version first.
+- Re-publishing the same version fails. Always bump the version first, and check the latest Store version before choosing it.
 - Screenshot filenames must start with the platform name, e.g. `emery_screenshot.png`.
 - `pebble publish --description` does not update the public description for an existing app. It is effectively new-app metadata. Use the dashboard for existing app description edits.
 
@@ -97,5 +117,7 @@ Notes:
 
 - Keep `MINUTE_UNIT` for the tick timer unless seconds are explicitly required.
 - Use Pebble system fonts for small labels. 1×1 hand-drawn pixel text disappears in QEMU.
-- Weather should show `--°` until real data arrives. No plausible fake live weather defaults.
-- Keep the deterministic preview renderer in sync with C geometry whenever layout changes.
+- Never show plausible fake data. Missing or stale values render as `--`, `STALE` or grey.
+- Settings live on the watch (persist keys 1001, 1003-1007). The phone sends only values the user actually saved. If phone storage is empty, it asks the watch (`REQUEST_SETTINGS`) instead of pushing defaults.
+- Message keys are append-only. The keys used up to 1.0.16 keep their order, so they keep their numeric ids.
+- The UUID `44201a31-161f-4e94-ad74-24429abe073e` must not change. It is the existing Store listing.
