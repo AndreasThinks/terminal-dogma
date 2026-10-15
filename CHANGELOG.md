@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.18
 
 - Quiet Time indicator: a cyan crescent moon and `QUIET` tag in the top bar while Quiet Time is on, checked every minute.
 

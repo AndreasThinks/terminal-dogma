@@ -1,7 +1,7 @@
 {
   "name": "terminal-dogma",
   "author": "Andreas Varotsis",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Evangelion/NERV-inspired Pebble Time 2 watchface: MAGI-style HUD with honest health, battery, phone-link and weather states, configurable modules, accent colour, Celsius/Fahrenheit weather, a configurable SYNC rail, and optional MAGI/system-boot transitions (Off/Subtle/Full).",
   "keywords": ["pebble-app", "watchface", "nerv"],
   "repository": {

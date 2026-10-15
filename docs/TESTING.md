@@ -41,6 +41,15 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 **Not covered by host tests:**
 - Drawing code in `pebble-watchface.c` and the Pebble service wiring. The emulator captures below cover these.
 
+## 1.0.18 release verification
+
+- Host tests: 193 C checks and 72 JavaScript checks, all passing.
+- Built with SDK 4.9.169 after `pebble clean`; PBW metadata verified as 1.0.18 with the existing UUID and Emery target.
+- Actual private Emery QEMU framebuffer captures verify the final PBW with the indicator absent, present, and present with Quick View open.
+- The on-state was injected into `s_quiet_time` using GDB, without modifying source or the PBW. This verifies drawing, not a real firmware Quiet Time toggle. The normal minute tick subsequently cleared the injected state using the firmware API.
+- A real-watch Quiet Time on/off check remains outstanding. The indicator can take up to one minute to reflect a toggle.
+- The SDK linker emits its RWX LOAD-segment warning; the build completes successfully.
+
 ## Production build
 
 ```bash
