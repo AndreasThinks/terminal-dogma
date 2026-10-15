@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Quiet Time indicator: a cyan crescent moon and `QUIET` tag in the top bar while Quiet Time is on, checked every minute.
+
 ## 1.0.17
 
 The name is now Terminal Dogma everywhere. The UUID and Store listing are unchanged.

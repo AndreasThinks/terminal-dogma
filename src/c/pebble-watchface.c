@@ -55,6 +55,7 @@ static TdWeatherSched s_wx_sched;
 
 static TdLink s_link;
 static bool s_is_obstructed;
+static bool s_quiet_time;
 
 /* Watch -> phone messages, one in flight at a time. */
 #define OUT_WEATHER 1
@@ -181,9 +182,11 @@ static uint8_t glyph_row(char c, int row) {
   static const uint8_t N[5] = {6, 5, 5, 5, 5};
   static const uint8_t O[5] = {7, 5, 5, 5, 7};
   static const uint8_t P[5] = {6, 5, 6, 4, 4};
+  static const uint8_t Q[5] = {7, 5, 5, 7, 1};
   static const uint8_t R[5] = {6, 5, 6, 5, 5};
   static const uint8_t S[5] = {7, 4, 7, 1, 7};
   static const uint8_t T[5] = {7, 2, 2, 2, 2};
+  static const uint8_t U[5] = {5, 5, 5, 5, 7};
   static const uint8_t V[5] = {5, 5, 5, 5, 2};
   static const uint8_t W[5] = {5, 5, 7, 7, 5};
   static const uint8_t Y[5] = {5, 5, 2, 2, 2};
@@ -206,8 +209,9 @@ static uint8_t glyph_row(char c, int row) {
     case 'D': g = D; break; case 'E': g = E; break; case 'H': g = H; break;
     case 'I': g = I; break; case 'K': g = K; break; case 'L': g = L; break;
     case 'M': g = M; break; case 'N': g = N; break; case 'O': g = O; break;
-    case 'P': g = P; break; case 'R': g = R; break; case 'S': g = S; break;
-    case 'T': g = T; break; case 'V': g = V; break; case 'W': g = W; break;
+    case 'P': g = P; break; case 'Q': g = Q; break; case 'R': g = R; break;
+    case 'S': g = S; break; case 'T': g = T; break; case 'U': g = U; break;
+    case 'V': g = V; break; case 'W': g = W; break;
     case 'Y': g = Y; break;
     case '0': g = D0; break; case '1': g = D1; break; case '2': g = D2; break;
     case '3': g = D3; break; case '4': g = D4; break; case '5': g = D5; break;
@@ -663,6 +667,19 @@ static void draw_power_tag(GContext *ctx) {
   }
 }
 
+/* Crescent moon and QUIET between the corner tags while Quiet Time is on. */
+static void draw_quiet_tag(GContext *ctx) {
+  if (!s_quiet_time || !shown(B_TAG_PWR_MS)) return;
+  char buf[8];
+  GColor ink = color_cyan();
+  int x = 84, y = 6;
+  graphics_context_set_fill_color(ctx, ink);
+  graphics_fill_circle(ctx, GPoint(x + 3, y + 3), 3);
+  graphics_context_set_fill_color(ctx, GColorBlack);
+  graphics_fill_circle(ctx, GPoint(x + 5, y + 2), 3);
+  draw_tiny_text(ctx, typed("QUIET", buf, sizeof(buf), B_TAG_PWR_MS, B_TAG_STEP), x + 8, y + 1, 1, ink);
+}
+
 /* ---------- Face ---------- */
 
 static void canvas_update_proc(Layer *layer, GContext *ctx) {
@@ -673,6 +690,7 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   draw_status_tag(ctx);
   draw_logo_area(ctx);
   draw_power_tag(ctx);
+  draw_quiet_tag(ctx);
 
   GColor accent = accent_color();
   graphics_context_set_stroke_color(ctx, accent);
@@ -752,6 +770,11 @@ static void update_time(void) {
   for (int i = 0; s_date_text[i]; i++) {
     if (s_date_text[i] >= 'a' && s_date_text[i] <= 'z') s_date_text[i] -= 32;
   }
+}
+
+/* Quiet Time has no change event, so it is polled with the minute tick. */
+static void update_quiet_time(void) {
+  s_quiet_time = quiet_time_is_active();
 }
 
 static void update_battery(BatteryChargeState state) {
@@ -993,6 +1016,7 @@ static void prv_unobstructed_did_change(void *context) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time();
   update_health();
+  update_quiet_time();
   maybe_request_weather();
   mark_dirty();
 }
@@ -1015,6 +1039,7 @@ static void main_window_load(Window *window) {
   update_battery(battery_state_service_peek());
   update_time();
   update_health();
+  update_quiet_time();
 
   GRect unobstructed = layer_get_unobstructed_bounds(s_window_layer);
   s_is_obstructed = !grect_equal(&bounds, &unobstructed);

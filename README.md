@@ -17,6 +17,7 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - At 10% or less it becomes an inverted red plate.
   - `CHG 40%` shows while charging. `EXT 100%` shows when plugged in but not charging.
 - Phone link: the `MAGI` tag becomes `LINK LOST` while the Pebble app is disconnected.
+- Quiet Time: a cyan crescent moon and `QUIET` tag sits in the top bar while Quiet Time is on. It is checked every minute, so it can lag a toggle by up to a minute.
 - Honest health data:
   - BIO shows the firmware's filtered heart rate. The SDK guarantees it is at most 15 minutes old.
   - BIO shows `--` when there is no reading. It never holds an old value.
