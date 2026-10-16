@@ -22,8 +22,8 @@ typedef enum {
 } TdSettingId;
 
 /* Schema 1: releases up to 1.0.16 (first five settings). Schema 2: adds TD_SET_MOTION.
- * Schema 3: adds TD_SET_SHAKE and TD_SET_SHAKE_FX. */
-#define TD_SETTINGS_SCHEMA 3
+ * Schema 3: adds TD_SET_SHAKE and TD_SET_SHAKE_FX. Schema 4: defaults shake to heart rate. */
+#define TD_SETTINGS_SCHEMA 4
 
 typedef struct { int v[TD_SETTING_COUNT]; } TdSettings;
 

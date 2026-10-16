@@ -87,7 +87,15 @@ function respond(x, status, body) {
   x.responseText = body;
   x.onload();
 }
-var GOOD = JSON.stringify({current: {temperature_2m: 17.6}});
+var GOOD = JSON.stringify({
+  current: {temperature_2m: 17.6},
+  hourly: {
+    time: [1760000400, 1760004000],
+    temperature_2m: [17.4, 18.1],
+    precipitation_probability: [0, 20],
+    weather_code: [1, 2]
+  }
+});
 
 /* ---------- settings ---------- */
 
@@ -116,6 +124,32 @@ test('saved 1.0.16 settings are resent without inventing an ANIMATION value', fu
   p.onReady();
   eq(env.sent[0].msg, {CLOCK_FORMAT: 1, BOTTOM_LAYOUT: 0, ACCENT_COLOR: 1, TEMP_UNIT: 0, SYNC_SOURCE: 3},
      'only stored keys');
+});
+
+test('legacy shake default becomes heart rate while preserving other saved choices', function() {
+  var env = makeEnv();
+  env.storage.setItem('nerv-watchface-settings-v1', JSON.stringify(
+    {ACCENT_COLOR: 2, SHAKE_SCREEN: 0, SHAKE_FX: 0}));
+  var p = phoneLib.createPhone(env);
+  p.onReady();
+  eq(env.sent[0].msg, {ACCENT_COLOR: 2, SHAKE_SCREEN: 2, SHAKE_FX: 0}, 'migrated settings sent');
+  eq(JSON.parse(env.storage.getItem(phoneLib.SETTINGS_KEY)),
+     {ACCENT_COLOR: 2, SHAKE_SCREEN: 2, SHAKE_FX: 0}, 'migrated settings saved under current key');
+});
+
+test('legacy non-default shake choices survive phone settings migration', function() {
+  var env = makeEnv();
+  env.storage.setItem('nerv-watchface-settings-v1', JSON.stringify(
+    {SHAKE_SCREEN: 1, SHAKE_FX: 1}));
+  phoneLib.createPhone(env).onReady();
+  eq(env.sent[0].msg, {SHAKE_SCREEN: 1, SHAKE_FX: 1}, 'explicit non-default values preserved');
+});
+
+test('fresh config defaults to heart rate and Sync Graph', function() {
+  var env = makeEnv();
+  var html = decodeURIComponent(phoneLib.createPhone(env).configUrl());
+  check(html.indexOf('<option value="2" selected>Heart rate, last 3 hours') >= 0, 'heart rate selected');
+  check(html.indexOf('<option value="0" selected>Sync Graph') >= 0, 'Sync Graph selected');
 });
 
 test('corrupt storage and out-of-range values are handled', function() {
@@ -327,6 +361,15 @@ function hourly(n, over) {
   return h;
 }
 
+test('ready refetches recently delivered legacy weather when forecast is missing', function() {
+  var env = makeEnv();
+  var now = Math.floor(env.now() / 1000);
+  env.storage.setItem(phoneLib.WEATHER_KEY, JSON.stringify({temp: 18, ts: now, deliveredTs: now}));
+  var p = phoneLib.createPhone(env);
+  eq(p.onReady(), 'fetch', 'legacy cache must not suppress forecast fetch');
+  eq(env.geoCalls, 1, 'refetch obtains fresh location and forecast');
+});
+
 test('weather fetch asks Open-Meteo for 12 hourly slots in unix time', function() {
   var env = makeEnv();
   var p = phoneLib.createPhone(env);
@@ -380,13 +423,13 @@ test('forecast stops at missing or out-of-order hours and never invents data', f
   var env = makeEnv();
   var p = phoneLib.createPhone(env);
   p.requestWeather('watch');
-  respond(env.xhrs[0], 200, GOOD);
+  respond(env.xhrs[0], 200, JSON.stringify({current: {temperature_2m: 17.6}}));
   eq(env.sent[0].msg, {TEMPERATURE: 18, WEATHER_TIME: env.sent[0].msg.WEATHER_TIME}, 'temperature only');
 });
 
 test('shake settings are stored, clamped and on the config page', function() {
   eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 2, SHAKE_FX: 1}), {SHAKE_SCREEN: 2, SHAKE_FX: 1}, 'kept');
-  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 3, SHAKE_FX: 7}), {SHAKE_SCREEN: 0, SHAKE_FX: 0}, 'out of range');
+  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 3, SHAKE_FX: 7}), {SHAKE_SCREEN: 2, SHAKE_FX: 0}, 'out of range');
   var html = phoneLib.buildConfigHtml({SHAKE_SCREEN: 1, SHAKE_FX: 1});
   check(html.indexOf('id="SHAKE_SCREEN"') > 0 && html.indexOf('id="SHAKE_FX"') > 0, 'selects present');
   check(html.indexOf('<option value="1" selected>Emergency Hex') > 0, 'current transition selected');

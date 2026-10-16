@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.20
+
+- Fix forecast recovery when an older phone cache contains a current temperature but no hourly forecast; it now fetches the missing forecast instead of treating the cache as complete.
+- Heart rate, last 3 hours, is now the default shake screen. Sync Graph remains the default transition.
+- Existing 1.0.19 installs migrate the old Off default to Heart rate. Other saved shake-screen and transition choices are preserved.
+
 ## 1.0.19
 
 - Shake to show (optional, off by default): a wrist shake opens either the next six hours of weather or a three-hour heart-rate graph, then returns to the face after 10 seconds. Shake again to close it.

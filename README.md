@@ -38,11 +38,11 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - **Battery level:** mirrors the watch battery percentage.
   - **Aesthetic diagnostic:** fixed at 85% for pure HUD flavour.
 - Transitions: **Off**, **Subtle** or **Full**, set in the settings page. Full is the default. Details are below.
-- Shake to show (optional, off by default): shake your wrist to open the hourly forecast or a heart-rate graph. Details are below.
+- Shake to show: shake your wrist to open the heart-rate graph by default, or choose the hourly forecast in settings. The default transition is Sync Graph. Details are below.
 
 ## Shake to show
 
-Turn it on in the settings page with **Shake to show**: **Weather, next 6 hours** or **Heart rate, last 3 hours**. **Shake transition** picks how the screen arrives: **Sync Graph** or **Emergency Hex**.
+The default is **Heart rate, last 3 hours** with the **Sync Graph** transition. In settings, choose **Off**, **Weather, next 6 hours**, or **Heart rate, last 3 hours**. **Shake transition** picks **Sync Graph** or **Emergency Hex**. Upgrading from 1.0.19 moves its old Off default to Heart rate; an explicit Weather choice remains unchanged.
 
 - **Weather.** The current temperature, the condition for this hour, the first hour with at least a 50% chance of rain (or `DRY 6H`), and six hourly bars with temperature and rain chance. Hours already past are dropped, so an older forecast shows fewer bars. The forecast follows the same freshness rules as the weather reading: `STALE` after an hour, and `NO FORECAST` once it expires at six hours.
 - **Heart rate.** The current BPM as on the BIO monitor, plus 18 ten-minute averages over the last three hours from Pebble Health, with max, min, average and how many slots had a reading. Slots without a reading are gaps in the line, never filled in. With no readings at all the screen says `NO HEART RATE DATA`.

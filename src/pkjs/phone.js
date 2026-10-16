@@ -1,7 +1,8 @@
 /* Terminal Dogma phone logic. Everything platform-specific is injected through `env`
  * so the host tests (tests/js) can drive it with fake timers, storage and transport. */
 
-var SETTINGS_KEY = 'nerv-watchface-settings-v1'; /* unchanged since 1.0.x */
+var SETTINGS_KEY = 'terminal-dogma-settings-v2';
+var LEGACY_SETTINGS_KEY = 'nerv-watchface-settings-v1';
 var WEATHER_KEY = 'terminal-dogma-weather-v1';
 var OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
 
@@ -12,7 +13,7 @@ var SETTINGS = {
   TEMP_UNIT: {max: 1, def: 0},
   SYNC_SOURCE: {max: 3, def: 0},
   ANIMATION: {max: 2, def: 2}, /* 0 off, 1 subtle, 2 full */
-  SHAKE_SCREEN: {max: 2, def: 0}, /* 0 off, 1 weather forecast, 2 heart rate */
+  SHAKE_SCREEN: {max: 2, def: 2}, /* 0 off, 1 weather forecast, 2 heart rate */
   SHAKE_FX: {max: 1, def: 0} /* 0 Sync Graph, 1 Emergency Hex */
 };
 var FORECAST_HOURS = 12;
@@ -134,7 +135,13 @@ function createPhone(env) {
 
   function loadSaved() {
     var saved = sanitizeSettings(readJson(SETTINGS_KEY));
-    return Object.keys(saved).length ? saved : null;
+    if (Object.keys(saved).length) return saved;
+    saved = sanitizeSettings(readJson(LEGACY_SETTINGS_KEY));
+    if (!Object.keys(saved).length) return null;
+    /* 1.0.19 stored Off as the default. Move that old default to heart rate. */
+    if (saved.SHAKE_SCREEN === 0) saved.SHAKE_SCREEN = SETTINGS.SHAKE_SCREEN.def;
+    env.storage.setItem(SETTINGS_KEY, JSON.stringify(saved));
+    return saved;
   }
 
   function saveSettings(partial) {
@@ -209,12 +216,14 @@ function createPhone(env) {
   function requestWeather(reason) {
     var now = nowS();
     var cache = readJson(WEATHER_KEY);
-    if (reason === 'ready' && cache && cache.deliveredTs && now - cache.deliveredTs >= 0 &&
+    var hasForecast = cache && cache.fc && num(cache.fc.start) &&
+      Array.isArray(cache.fc.temps) && cache.fc.temps.length > 0;
+    if (reason === 'ready' && hasForecast && cache.deliveredTs && now - cache.deliveredTs >= 0 &&
         now - cache.deliveredTs < T.READY_SKIP_S) {
       return 'skip-delivered';
     }
-    if (cache && typeof cache.temp === 'number' && now - cache.ts >= 0 && now - cache.ts < T.CACHE_REUSE_S) {
-      sendWeather(cache.temp, cache.ts, cache.fc || null);
+    if (hasForecast && typeof cache.temp === 'number' && now - cache.ts >= 0 && now - cache.ts < T.CACHE_REUSE_S) {
+      sendWeather(cache.temp, cache.ts, cache.fc);
       return 'cache';
     }
     if (fetching) return 'busy';
@@ -352,6 +361,7 @@ module.exports = {
   parseForecast: parseForecast,
   buildConfigHtml: buildConfigHtml,
   SETTINGS_KEY: SETTINGS_KEY,
+  LEGACY_SETTINGS_KEY: LEGACY_SETTINGS_KEY,
   WEATHER_KEY: WEATHER_KEY,
   TIMING: T
 };

@@ -45,17 +45,17 @@ TEST(settings_upgrade_from_1_0_16_pins_animation_default) {
   CHECK(s.v[TD_SET_TEMP_UNIT] == TD_TEMP_F);
   CHECK(s.v[TD_SET_SYNC] == TD_SYNC_BATTERY);
   CHECK(s.v[TD_SET_MOTION] == TD_MOTION_FULL);
-  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART);
   /* only the migrated keys are written */
   CHECK(write == ((1u << TD_SET_MOTION) | (1u << TD_SET_SHAKE) | (1u << TD_SET_SHAKE_FX)));
 }
 
-TEST(settings_schema2_keeps_user_choice_and_adds_shake_off) {
+TEST(settings_schema2_keeps_user_choice_and_adds_heart_rate_default) {
   TdSettings s;
   int stored[TD_SETTING_COUNT] = {0, 0, 0, 0, 0, TD_MOTION_OFF, 0, 0};
   uint32_t write = td_settings_load(&s, stored, 0x3F, 2);
   CHECK(s.v[TD_SET_MOTION] == TD_MOTION_OFF);
-  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART);
   CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_SYNC_GRAPH);
   CHECK(write == ((1u << TD_SET_SHAKE) | (1u << TD_SET_SHAKE_FX)));
 }
@@ -69,9 +69,23 @@ TEST(settings_schema3_keeps_shake_choice_and_writes_nothing) {
   CHECK(write == 0);
   stored[TD_SET_SHAKE] = 3;
   stored[TD_SET_SHAKE_FX] = 2;
-  td_settings_load(&s, stored, 0xFF, 3);
-  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF); /* out of range falls back to the default */
+  write = td_settings_load(&s, stored, 0xFF, 3);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART); /* invalid and old default fall back to HR */
   CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_SYNC_GRAPH);
+  CHECK(write == 0);
+}
+
+TEST(settings_schema3_default_off_migrates_to_heart_and_schema4_preserves_off_choice) {
+  TdSettings s;
+  int stored[TD_SETTING_COUNT] = {0, 0, 0, 0, 0, TD_MOTION_FULL, TD_SHAKE_OFF, TD_FX_SYNC_GRAPH};
+  uint32_t write = td_settings_load(&s, stored, 0xFF, 3);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART);
+  CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_SYNC_GRAPH);
+  CHECK(write == (1u << TD_SET_SHAKE));
+  stored[TD_SET_SHAKE] = TD_SHAKE_OFF;
+  write = td_settings_load(&s, stored, 0xFF, 4);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF);
+  CHECK(write == 0);
 }
 
 TEST(settings_fresh_install_and_clamping) {
@@ -668,8 +682,9 @@ TEST(peek_transition_always_terminates) {
 
 int main(void) {
   RUN(settings_upgrade_from_1_0_16_pins_animation_default);
-  RUN(settings_schema2_keeps_user_choice_and_adds_shake_off);
+  RUN(settings_schema2_keeps_user_choice_and_adds_heart_rate_default);
   RUN(settings_schema3_keeps_shake_choice_and_writes_nothing);
+  RUN(settings_schema3_default_off_migrates_to_heart_and_schema4_preserves_off_choice);
   RUN(settings_fresh_install_and_clamping);
   RUN(settings_identical_resend_needs_no_flash_write);
   RUN(weather_freshness_bands);

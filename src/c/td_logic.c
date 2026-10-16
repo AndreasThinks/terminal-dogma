@@ -7,7 +7,7 @@
 
 static const int s_defaults[TD_SETTING_COUNT] = {
   TD_CLOCK_SYSTEM, TD_LAYOUT_STEPS_WEATHER, TD_ACCENT_RED, TD_TEMP_C, TD_SYNC_FRESHNESS,
-  TD_MOTION_FULL, TD_SHAKE_OFF, TD_FX_SYNC_GRAPH,
+  TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_SYNC_GRAPH,
 };
 static const int s_max[TD_SETTING_COUNT] = {
   TD_CLOCK_12H, TD_LAYOUT_STEPS_BATTERY, TD_ACCENT_CYAN, TD_TEMP_F, TD_SYNC_AESTHETIC,
@@ -38,12 +38,17 @@ uint32_t td_settings_load(TdSettings *s, const int *stored, uint32_t present_mas
     s->v[TD_SET_MOTION] = s_defaults[TD_SET_MOTION];
     write_mask |= 1u << TD_SET_MOTION;
   }
-  /* 2 -> 3: shake screen added, off unless the user turns it on. */
-  if (stored_schema < 3) {
+  /* 3 -> 4: make heart rate the default. Schema 3 persisted the old Off default,
+   * so migrate that value; preserve all other existing choices. */
+  if (stored_schema < 4) {
     for (int i = TD_SET_SHAKE; i <= TD_SET_SHAKE_FX; i++) {
       if (present_mask & (1u << i)) continue;
       s->v[i] = s_defaults[i];
       write_mask |= 1u << i;
+    }
+    if ((present_mask & (1u << TD_SET_SHAKE)) && s->v[TD_SET_SHAKE] == TD_SHAKE_OFF) {
+      s->v[TD_SET_SHAKE] = TD_SHAKE_HEART;
+      write_mask |= 1u << TD_SET_SHAKE;
     }
   }
   return write_mask;
