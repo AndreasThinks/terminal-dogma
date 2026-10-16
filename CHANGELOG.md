@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.19
+
+- Shake to show (optional, off by default): a wrist shake opens either the next six hours of weather or a three-hour heart-rate graph, then returns to the face after 10 seconds. Shake again to close it.
+  - Two Evangelion transitions to choose from: **Sync Graph** (sync waves collapsing onto the data) and **Emergency Hex** (EMERGENCY panel cascade).
+  - Animations Off or a low battery opens it with a hard cut.
+  - Hours already past are never shown; heart-rate slots without a reading stay as gaps.
+- The phone now fetches a 12-hour hourly forecast (temperature, rain chance, condition) with the current temperature, in the same request.
+
 ## 1.0.18
 
 - Quiet Time indicator: a cyan crescent moon and `QUIET` tag in the top bar while Quiet Time is on, checked every minute.

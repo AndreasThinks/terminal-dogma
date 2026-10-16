@@ -28,6 +28,13 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
   - Check order.
   - A simulated 12-hour day with 240 relaunches.
 
+- Shake to show:
+  - Settings migration to schema 3 pins it Off, and a schema-3 choice is kept.
+  - The forecast drops past hours, expires with the weather, and rejects missing or corrupt data.
+  - Rain call-out, condition labels and Fahrenheit conversion.
+  - Heart-rate statistics skip slots without a reading.
+  - Off ignores shakes. Each transition ends in the held screen, a burst of taps from one shake does not close it, Off or low battery cuts without frames, and the transition terminates with stuck, jumping or negative clocks.
+
 **JS tests cover:**
 - Lost phone storage asks the watch instead of pushing defaults.
 - 1.0.16-era saved settings are resent without inventing new keys.
@@ -37,9 +44,17 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 - Overlapping fetch guard, and HTTP error, timeout and parse failures.
 - A hung geolocation is abandoned, and late replies are ignored.
 - No phone-side timers are left running.
+- The hourly forecast request, byte-array encoding (including below-zero temperatures), the cached resend, stopping at missing or out-of-order hours, and sending the temperature alone when the forecast is unusable.
+- Shake settings clamping and the config page.
 
 **Not covered by host tests:**
 - Drawing code in `pebble-watchface.c` and the Pebble service wiring. The emulator captures below cover these.
+
+## 1.0.19 status (shake to show)
+
+- Host tests pass.
+- Not yet built with the Pebble SDK or run in the emulator: the SDK download was blocked where this was written. The drawing code was compiled with `-Wall -Wextra -Werror` against a hand-written stand-in for `pebble.h` and rendered frame by frame on the desktop to check layout and timing. That checks the code paths, not real fonts or SDK signatures.
+- Before release: `pebble build`, then in the Emery emulator turn Shake to show on, inject weather with forecast keys, and trigger shakes with `pebble emu-tap`. Check both transitions, both screens, the 10-second return and the second-shake close. On a real watch, check how easily a shake (and nothing else) opens it, and the HR history from Health.
 
 ## 1.0.18 release verification
 

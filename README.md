@@ -38,6 +38,20 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - **Battery level:** mirrors the watch battery percentage.
   - **Aesthetic diagnostic:** fixed at 85% for pure HUD flavour.
 - Transitions: **Off**, **Subtle** or **Full**, set in the settings page. Full is the default. Details are below.
+- Shake to show (optional, off by default): shake your wrist to open the hourly forecast or a heart-rate graph. Details are below.
+
+## Shake to show
+
+Turn it on in the settings page with **Shake to show**: **Weather, next 6 hours** or **Heart rate, last 3 hours**. **Shake transition** picks how the screen arrives: **Sync Graph** or **Emergency Hex**.
+
+- **Weather.** The current temperature, the condition for this hour, the first hour with at least a 50% chance of rain (or `DRY 6H`), and six hourly bars with temperature and rain chance. Hours already past are dropped, so an older forecast shows fewer bars. The forecast follows the same freshness rules as the weather reading: `STALE` after an hour, and `NO FORECAST` once it expires at six hours.
+- **Heart rate.** The current BPM as on the BIO monitor, plus 18 ten-minute averages over the last three hours from Pebble Health, with max, min, average and how many slots had a reading. Slots without a reading are gaps in the line, never filled in. With no readings at all the screen says `NO HEART RATE DATA`.
+- **Sync Graph (about 1.65 s).** A ruled frame opens out of the face, phase-shifted sync waves sweep through it under the EVA 01 badge, then collapse onto the screen's own line (the heart-rate trace, or the tops of the forecast bars) before the labels type in.
+- **Emergency Hex (about 1.45 s).** Red EMERGENCY hexagons cascade in from the right, with the clock, WARNING and NERV panels among them. They strobe, then drop away left to right to show the screen.
+- The screen returns to the face after 10 seconds. Shake again to close it sooner. Taps in the first 1.5 seconds are ignored, because one shake fires several.
+- With animations **Off**, or at 20% battery or less, the screen opens with a hard cut and no transition frames. The transition also cuts to the screen if the battery reaches critical while it plays.
+- A running MAGI sequence is cancelled when the screen opens, and recoveries do not animate while it is showing.
+- The accelerometer tap service is only subscribed while Shake to show is on. Health is read once when the screen opens, not every frame.
 
 ## Transitions
 
@@ -60,13 +74,13 @@ The transitions combine two ideas: a NERV system boot and a MAGI consensus check
 
   - Recoveries are limited to one response per 5 minutes.
   - A routine weather refresh (fresh to fresh) never animates.
-  - Nothing animates every minute, and there is no wrist-flick trigger.
+  - Nothing animates every minute. A wrist shake only opens the Shake to show screen, when that is turned on.
 - **Skips and cancellation:**
   - Battery at 10% or less (not charging): nothing plays.
   - Battery at 20% or less: launch shortens to the MAGI-only response.
   - Quick View: launch shortens to the MAGI-only response, and Quick View appearing during the full sequence cancels it.
   - Changing the animation setting cancels any running sequence. Unloading the face cancels the timer.
-- **Off** starts no animation timers. No accelerometer service is ever subscribed.
+- **Off** starts no animation timers. With Shake to show on, Off makes the shake screen a hard cut with a single 10-second timer to return.
 - **Frame budget:** one 66 ms app timer while a sequence runs. Each sequence is hard-capped at a fixed number of steps.
 
 ## Repository layout
@@ -119,6 +133,6 @@ Notes:
 - Keep `MINUTE_UNIT` for the tick timer unless seconds are explicitly required.
 - Use Pebble system fonts for small labels. 1×1 hand-drawn pixel text disappears in QEMU.
 - Never show plausible fake data. Missing or stale values render as `--`, `STALE` or grey.
-- Settings live on the watch (persist keys 1001, 1003-1007). The phone sends only values the user actually saved. If phone storage is empty, it asks the watch (`REQUEST_SETTINGS`) instead of pushing defaults.
+- Settings live on the watch (persist keys 1001, 1003-1009). The hourly forecast is persisted at 1014. The phone sends only values the user actually saved. If phone storage is empty, it asks the watch (`REQUEST_SETTINGS`) instead of pushing defaults.
 - Message keys are append-only. The keys used up to 1.0.16 keep their order, so they keep their numeric ids.
 - The UUID `44201a31-161f-4e94-ad74-24429abe073e` must not change. It is the existing Store listing.
