@@ -11,8 +11,11 @@ var SETTINGS = {
   ACCENT_COLOR: {max: 3, def: 0},
   TEMP_UNIT: {max: 1, def: 0},
   SYNC_SOURCE: {max: 3, def: 0},
-  ANIMATION: {max: 2, def: 2} /* 0 off, 1 subtle, 2 full */
+  ANIMATION: {max: 2, def: 2}, /* 0 off, 1 subtle, 2 full */
+  SHAKE_SCREEN: {max: 2, def: 0}, /* 0 off, 1 weather forecast, 2 heart rate */
+  SHAKE_FX: {max: 1, def: 0} /* 0 Sync Graph, 1 Emergency Hex */
 };
+var FORECAST_HOURS = 12;
 var SETTING_NAMES = Object.keys(SETTINGS);
 
 var T = {
@@ -145,8 +148,16 @@ function createPhone(env) {
     if (Object.keys(settings).length) queue.enqueue('settings', settings);
   }
 
-  function sendWeather(temp, ts) {
-    queue.enqueue('weather', {TEMPERATURE: temp, WEATHER_TIME: ts}, function() {
+  function sendWeather(temp, ts, fc) {
+    var msg = {TEMPERATURE: temp, WEATHER_TIME: ts};
+    if (fc) {
+      msg.FORECAST_START = fc.start;
+      /* byte arrays: temperatures as signed bytes */
+      msg.FORECAST_TEMPS = fc.temps.map(function(t) { return t & 0xff; });
+      msg.FORECAST_RAIN = fc.rain;
+      msg.FORECAST_CODES = fc.codes;
+    }
+    queue.enqueue('weather', msg, function() {
       var cache = readJson(WEATHER_KEY) || {};
       if (cache.ts === ts) {
         cache.deliveredTs = nowS();
@@ -164,7 +175,9 @@ function createPhone(env) {
   }
 
   function fetchWeather(id, lat, lon) {
-    var url = OPEN_METEO_URL + '?latitude=' + lat + '&longitude=' + lon + '&current=temperature_2m';
+    var url = OPEN_METEO_URL + '?latitude=' + lat + '&longitude=' + lon + '&current=temperature_2m' +
+      '&hourly=temperature_2m,precipitation_probability,weather_code&forecast_hours=' + FORECAST_HOURS +
+      '&timeformat=unixtime';
     var req = env.createXhr();
     req.open('GET', url, true);
     req.timeout = T.HTTP_TIMEOUT_MS;
@@ -173,17 +186,20 @@ function createPhone(env) {
     req.onload = function() {
       if (id !== fetchId || !fetching) return;
       if (req.status !== 200) return finishFetch(id, 'http ' + req.status);
-      var temp;
+      var temp, data;
       try {
-        var data = JSON.parse(req.responseText);
+        data = JSON.parse(req.responseText);
         temp = Math.round(data.current.temperature_2m);
       } catch (e) {
         return finishFetch(id, 'parse error');
       }
       if (typeof temp !== 'number' || isNaN(temp)) return finishFetch(id, 'no temperature');
       var ts = nowS();
-      env.storage.setItem(WEATHER_KEY, JSON.stringify({temp: temp, ts: ts}));
-      sendWeather(temp, ts);
+      var fc = parseForecast(data);
+      var cache = {temp: temp, ts: ts};
+      if (fc) cache.fc = fc;
+      env.storage.setItem(WEATHER_KEY, JSON.stringify(cache));
+      sendWeather(temp, ts, fc);
       finishFetch(id, 'ok');
     };
     req.send();
@@ -198,7 +214,7 @@ function createPhone(env) {
       return 'skip-delivered';
     }
     if (cache && typeof cache.temp === 'number' && now - cache.ts >= 0 && now - cache.ts < T.CACHE_REUSE_S) {
-      sendWeather(cache.temp, cache.ts);
+      sendWeather(cache.temp, cache.ts, cache.fc || null);
       return 'cache';
     }
     if (fetching) return 'busy';
@@ -260,6 +276,28 @@ function createPhone(env) {
   };
 }
 
+function num(v) {
+  return typeof v === 'number' && !isNaN(v);
+}
+
+/* Open-Meteo hourly block -> {start, temps, rain, codes}, or null. Slots stop at the first
+ * hour without a temperature or out of order, so the watch never shows invented hours. */
+function parseForecast(data) {
+  var h = data && data.hourly;
+  if (!h || !h.time || !h.temperature_2m || !num(h.time[0])) return null;
+  var fc = {start: h.time[0], temps: [], rain: [], codes: []};
+  for (var i = 0; i < h.time.length && i < FORECAST_HOURS; i++) {
+    var t = h.temperature_2m[i];
+    if (!num(t) || h.time[i] !== fc.start + i * 3600) break;
+    var p = h.precipitation_probability ? h.precipitation_probability[i] : null;
+    var c = h.weather_code ? h.weather_code[i] : null;
+    fc.temps.push(Math.max(-128, Math.min(127, Math.round(t))));
+    fc.rain.push(num(p) ? Math.max(0, Math.min(100, Math.round(p))) : 0);
+    fc.codes.push(num(c) && c >= 0 && c < 255 ? c : 255);
+  }
+  return fc.temps.length ? fc : null;
+}
+
 function option(value, label, selected) {
   return '<option value="' + value + '"' + (selected === value ? ' selected' : '') + '>' + label + '</option>';
 }
@@ -289,12 +327,16 @@ function buildConfigHtml(settings) {
     select('TEMP_UNIT', 'Temperature unit', settings, ['Celsius', 'Fahrenheit']) +
     select('SYNC_SOURCE', 'SYNC rail source', settings, ['Data freshness', 'Steps progress', 'Battery level', 'Aesthetic diagnostic']) +
     select('ANIMATION', 'Animations', settings, ['Off', 'Subtle (MAGI check only)', 'Full (system boot + MAGI check)']) +
+    select('SHAKE_SCREEN', 'Shake to show', settings, ['Off', 'Weather, next 6 hours', 'Heart rate, last 3 hours']) +
+    select('SHAKE_FX', 'Shake transition', settings, ['Sync Graph', 'Emergency Hex']) +
     '<button id="save">Save</button>' +
     '<div class="note">Weather comes from Open-Meteo using your phone location, refreshed about every 30 minutes. ' +
     'It turns grey and reads STALE after an hour without an update, and -- after six hours. ' +
     'BIO shows the watch\'s most recent heart-rate reading (at most 15 minutes old), or -- when there is none. ' +
     'Animations play when the face is first shown (at most once every 30 minutes) and briefly when the phone link or weather recovers. ' +
-    'Off uses no animation timers at all.</div>' +
+    'Off uses no animation timers at all. ' +
+    'Shake to show opens the forecast or a heart-rate graph for 10 seconds; shake again to close it. ' +
+    'With animations Off or a low battery it opens without the transition.</div>' +
     '</div><script>' +
     'document.getElementById("save").onclick=function(){var s={};' + JSON.stringify(SETTING_NAMES) +
     '.forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});' +
@@ -307,6 +349,7 @@ module.exports = {
   createQueue: createQueue,
   sanitizeSettings: sanitizeSettings,
   clampSetting: clampSetting,
+  parseForecast: parseForecast,
   buildConfigHtml: buildConfigHtml,
   SETTINGS_KEY: SETTINGS_KEY,
   WEATHER_KEY: WEATHER_KEY,

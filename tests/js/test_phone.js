@@ -312,5 +312,85 @@ test('no permanent phone-side timers after activity settles', function() {
   eq(env.pendingTimers(), 0, 'idle');
 });
 
+/* ---------- hourly forecast ---------- */
+
+var HOUR0 = 1760000400;
+function hourly(n, over) {
+  var h = {time: [], temperature_2m: [], precipitation_probability: [], weather_code: []};
+  for (var i = 0; i < n; i++) {
+    h.time.push(HOUR0 + i * 3600);
+    h.temperature_2m.push(12.4 - i);
+    h.precipitation_probability.push(i * 10);
+    h.weather_code.push(i < 3 ? 3 : 61);
+  }
+  Object.keys(over || {}).forEach(function(k) { h[k] = over[k]; });
+  return h;
+}
+
+test('weather fetch asks Open-Meteo for 12 hourly slots in unix time', function() {
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  var url = env.xhrs[0].url;
+  check(url.indexOf('hourly=temperature_2m,precipitation_probability,weather_code') > 0, 'hourly fields: ' + url);
+  check(url.indexOf('forecast_hours=12') > 0, 'twelve hours');
+  check(url.indexOf('timeformat=unixtime') > 0, 'unix times');
+});
+
+test('forecast travels with the temperature as byte arrays', function() {
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  respond(env.xhrs[0], 200, JSON.stringify({current: {temperature_2m: 12.4}, hourly: hourly(14)}));
+  var msg = env.sent[0].msg;
+  eq(msg.TEMPERATURE, 12, 'current temperature');
+  eq(msg.FORECAST_START, HOUR0, 'start hour');
+  eq(msg.FORECAST_TEMPS.length, 12, 'capped at 12 hours');
+  eq(msg.FORECAST_TEMPS.slice(0, 3), [12, 11, 10], 'rounded temperatures');
+  eq(msg.FORECAST_RAIN.slice(0, 3), [0, 10, 20], 'rain chance');
+  eq(msg.FORECAST_CODES.slice(2, 4), [3, 61], 'weather codes');
+  var cached = JSON.parse(env.storage.getItem(phoneLib.WEATHER_KEY));
+  eq(cached.fc.start, HOUR0, 'forecast cached with the reading');
+  env.sent[0].fail();
+  env.advance(60000);
+  eq(p.requestWeather('watch'), 'cache', 'cache reused');
+  eq(env.last().msg.FORECAST_TEMPS, msg.FORECAST_TEMPS, 'cache resend keeps the forecast');
+});
+
+test('below-zero forecast temperatures are sent as signed bytes', function() {
+  var fc = phoneLib.parseForecast({hourly: hourly(2, {temperature_2m: [-3.2, -128.9]})});
+  eq(fc.temps, [-3, -128], 'parsed and clamped');
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  respond(env.xhrs[0], 200, JSON.stringify({current: {temperature_2m: -3}, hourly: hourly(2, {temperature_2m: [-3.2, 200]})}));
+  eq(env.sent[0].msg.FORECAST_TEMPS, [253, 127], 'two\'s complement bytes');
+});
+
+test('forecast stops at missing or out-of-order hours and never invents data', function() {
+  eq(phoneLib.parseForecast({}), null, 'no hourly block');
+  eq(phoneLib.parseForecast({hourly: hourly(0)}), null, 'empty');
+  eq(phoneLib.parseForecast({hourly: hourly(5, {temperature_2m: [10, 9, null, 7, 6]})}).temps, [10, 9], 'stops at a gap');
+  var t = hourly(4).time; t[2] += 60;
+  eq(phoneLib.parseForecast({hourly: hourly(4, {time: t})}).temps.length, 2, 'stops at a time jump');
+  var fc = phoneLib.parseForecast({hourly: hourly(3, {precipitation_probability: [null, 140, -5], weather_code: [null, 2, 999]})});
+  eq(fc.rain, [0, 100, 0], 'rain clamped, missing as 0');
+  eq(fc.codes, [255, 2, 255], 'unknown code as 255');
+  /* the current reading still goes out when the forecast is unusable */
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  respond(env.xhrs[0], 200, GOOD);
+  eq(env.sent[0].msg, {TEMPERATURE: 18, WEATHER_TIME: env.sent[0].msg.WEATHER_TIME}, 'temperature only');
+});
+
+test('shake settings are stored, clamped and on the config page', function() {
+  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 2, SHAKE_FX: 1}), {SHAKE_SCREEN: 2, SHAKE_FX: 1}, 'kept');
+  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 3, SHAKE_FX: 7}), {SHAKE_SCREEN: 0, SHAKE_FX: 0}, 'out of range');
+  var html = phoneLib.buildConfigHtml({SHAKE_SCREEN: 1, SHAKE_FX: 1});
+  check(html.indexOf('id="SHAKE_SCREEN"') > 0 && html.indexOf('id="SHAKE_FX"') > 0, 'selects present');
+  check(html.indexOf('<option value="1" selected>Emergency Hex') > 0, 'current transition selected');
+});
+
 console.log('JS phone: ' + checks + ' checks, ' + failures + ' failures');
 process.exit(failures ? 1 : 0);

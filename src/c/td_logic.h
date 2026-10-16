@@ -12,14 +12,18 @@ enum { TD_ACCENT_RED, TD_ACCENT_AMBER, TD_ACCENT_GREEN, TD_ACCENT_CYAN };
 enum { TD_TEMP_C, TD_TEMP_F };
 enum { TD_SYNC_FRESHNESS, TD_SYNC_STEPS, TD_SYNC_BATTERY, TD_SYNC_AESTHETIC };
 enum { TD_MOTION_OFF, TD_MOTION_SUBTLE, TD_MOTION_FULL };
+enum { TD_SHAKE_OFF, TD_SHAKE_WEATHER, TD_SHAKE_HEART };
+enum { TD_FX_SYNC_GRAPH, TD_FX_EMERGENCY_HEX };
 
 typedef enum {
   TD_SET_CLOCK, TD_SET_LAYOUT, TD_SET_ACCENT, TD_SET_TEMP_UNIT, TD_SET_SYNC, TD_SET_MOTION,
+  TD_SET_SHAKE, TD_SET_SHAKE_FX,
   TD_SETTING_COUNT
 } TdSettingId;
 
-/* Schema 1: releases up to 1.0.16 (first five settings). Schema 2: adds TD_SET_MOTION. */
-#define TD_SETTINGS_SCHEMA 2
+/* Schema 1: releases up to 1.0.16 (first five settings). Schema 2: adds TD_SET_MOTION.
+ * Schema 3: adds TD_SET_SHAKE and TD_SET_SHAKE_FX. */
+#define TD_SETTINGS_SCHEMA 3
 
 typedef struct { int v[TD_SETTING_COUNT]; } TdSettings;
 
@@ -61,6 +65,42 @@ bool td_weather_should_request(const TdWeatherSched *s, bool connected, bool hav
 void td_weather_note_attempt(TdWeatherSched *s, int64_t now);
 void td_weather_note_success(TdWeatherSched *s);
 void td_weather_note_reconnect(TdWeatherSched *s);
+
+/* ---------- Hourly forecast ---------- */
+#define TD_FC_SLOTS 12 /* hours stored, starting at the hour of the fetch */
+#define TD_FC_SHOWN 6  /* hours shown on the shake screen */
+#define TD_FC_RAIN_PCT 50 /* first hour at or above this chance is called out */
+
+typedef struct {
+  int32_t start;               /* UTC start of slot 0; 0 = no forecast */
+  int32_t ts;                  /* when it was fetched (same freshness rules as weather) */
+  uint8_t count;               /* valid slots */
+  int8_t temp_c[TD_FC_SLOTS];
+  uint8_t rain_pct[TD_FC_SLOTS];
+  uint8_t code[TD_FC_SLOTS];   /* WMO weather code */
+} TdForecast;
+
+/* Index of the slot containing `now`, or -1 when the forecast is missing, expired
+ * or entirely in the past. Hours already gone are never shown. */
+int td_forecast_first(const TdForecast *f, int64_t now);
+/* Slots shown from `first` (at most TD_FC_SHOWN). */
+int td_forecast_shown(const TdForecast *f, int first);
+/* Offset (0-based, from `first`) of the first shown hour with rain >= TD_FC_RAIN_PCT, or -1. */
+int td_forecast_rain_at(const TdForecast *f, int first);
+/* Short label for a WMO weather code: CLEAR, CLOUD, FOG, RAIN, SNOW, STORM or "--". */
+const char *td_wmo_label(int code);
+/* Temperature in the display unit (no suffix). */
+int td_temp_in_unit(int temp_c, int unit);
+
+/* ---------- Heart-rate history ---------- */
+#define TD_HR_BUCKETS 18      /* 10-minute averages over the last 3 hours */
+#define TD_HR_BUCKET_S (10 * 60)
+
+typedef struct { int count, min, max, avg; } TdHrStats;
+/* Statistics over buckets with a reading (value > 0). count is 0 when there are none. */
+TdHrStats td_hr_stats(const int16_t *bpm, int n);
+/* Maps v in [lo, hi] onto [y_bottom, y_top] (screen y grows downwards), with a 10% margin. */
+int td_scale_y(int v, int lo, int hi, int y_top, int y_bottom);
 
 /* ---------- Health, power, clock, link ---------- */
 typedef struct { bool valid; int32_t value; } TdReading;
@@ -149,3 +189,41 @@ int td_anim_max_steps(TdAnimKind kind);
 uint32_t td_anim_due_votes(const TdAnim *a);
 int td_anim_pass_count(const TdAnim *a);
 const char *td_decision_name(TdDecision d);
+
+/* ---------- Shake screen ----------
+ * A wrist shake opens the chosen screen (weather or heart rate) through one of two
+ * transitions, holds it, then returns to the face. A second shake dismisses it. */
+#define TD_PEEK_HOLD_MS 10000   /* screen returns to the face after this */
+#define TD_PEEK_DEBOUNCE_MS 1500 /* one shake fires several taps; ignore them this long */
+#define TD_FX_SYNC_MS 1650
+#define TD_FX_HEX_MS 1450
+
+typedef enum { TD_PEEK_IDLE, TD_PEEK_IN, TD_PEEK_HOLD } TdPeekPhase;
+typedef enum { TD_PEEK_NOOP, TD_PEEK_OPEN_FX, TD_PEEK_OPEN_CUT, TD_PEEK_CLOSE } TdPeekEvent;
+
+typedef struct {
+  TdPeekPhase phase;
+  int screen;          /* TD_SHAKE_WEATHER or TD_SHAKE_HEART while open */
+  int fx;              /* TD_FX_* while in TD_PEEK_IN */
+  int t_ms;            /* transition clock */
+  int steps;
+  int64_t opened_ms;   /* wall clock at opening, for the debounce */
+} TdPeek;
+
+typedef struct {
+  int shake;           /* TD_SET_SHAKE */
+  int fx;              /* TD_SET_SHAKE_FX */
+  int motion;          /* TD_SET_MOTION: Off means a hard cut */
+  int battery_pct;
+  bool charging;
+} TdPeekEnv;
+
+/* A tap arrived at wall-clock now_ms. Opens (with or without the transition) or closes. */
+TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms);
+/* Advances the transition by dt_ms (guarded like td_anim_step). Returns true while
+ * another frame is needed; on false the screen is in TD_PEEK_HOLD. */
+bool td_peek_step(TdPeek *p, int dt_ms);
+void td_peek_close(TdPeek *p);
+int td_fx_duration(int fx);
+int td_fx_max_steps(int fx);
+bool td_peek_open(const TdPeek *p);

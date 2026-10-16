@@ -7,11 +7,11 @@
 
 static const int s_defaults[TD_SETTING_COUNT] = {
   TD_CLOCK_SYSTEM, TD_LAYOUT_STEPS_WEATHER, TD_ACCENT_RED, TD_TEMP_C, TD_SYNC_FRESHNESS,
-  TD_MOTION_FULL,
+  TD_MOTION_FULL, TD_SHAKE_OFF, TD_FX_SYNC_GRAPH,
 };
 static const int s_max[TD_SETTING_COUNT] = {
   TD_CLOCK_12H, TD_LAYOUT_STEPS_BATTERY, TD_ACCENT_CYAN, TD_TEMP_F, TD_SYNC_AESTHETIC,
-  TD_MOTION_FULL,
+  TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_EMERGENCY_HEX,
 };
 
 int td_setting_default(int id) {
@@ -37,6 +37,14 @@ uint32_t td_settings_load(TdSettings *s, const int *stored, uint32_t present_mas
   if (stored_schema < 2 && !(present_mask & (1u << TD_SET_MOTION))) {
     s->v[TD_SET_MOTION] = s_defaults[TD_SET_MOTION];
     write_mask |= 1u << TD_SET_MOTION;
+  }
+  /* 2 -> 3: shake screen added, off unless the user turns it on. */
+  if (stored_schema < 3) {
+    for (int i = TD_SET_SHAKE; i <= TD_SET_SHAKE_FX; i++) {
+      if (present_mask & (1u << i)) continue;
+      s->v[i] = s_defaults[i];
+      write_mask |= 1u << i;
+    }
   }
   return write_mask;
 }
@@ -105,6 +113,72 @@ void td_weather_note_success(TdWeatherSched *s) {
 
 void td_weather_note_reconnect(TdWeatherSched *s) {
   s->attempts = 0;
+}
+
+/* ---------- Hourly forecast ---------- */
+
+int td_forecast_first(const TdForecast *f, int64_t now) {
+  if (!f || f->start <= 0 || f->count == 0 || f->count > TD_FC_SLOTS) return -1;
+  if (td_weather_state(true, f->ts, now) == TD_WX_NONE) return -1;
+  int64_t since = now - f->start;
+  int first = since < 0 ? 0 : (int)(since / 3600);
+  return first < f->count ? first : -1;
+}
+
+int td_forecast_shown(const TdForecast *f, int first) {
+  if (first < 0) return 0;
+  int n = f->count - first;
+  return n > TD_FC_SHOWN ? TD_FC_SHOWN : n;
+}
+
+int td_forecast_rain_at(const TdForecast *f, int first) {
+  int n = td_forecast_shown(f, first);
+  for (int i = 0; i < n; i++) {
+    if (f->rain_pct[first + i] >= TD_FC_RAIN_PCT) return i;
+  }
+  return -1;
+}
+
+const char *td_wmo_label(int code) {
+  if (code < 0) return "--";
+  if (code <= 1) return "CLEAR";
+  if (code <= 3) return "CLOUD";
+  if (code == 45 || code == 48) return "FOG";
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return "RAIN";
+  if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "SNOW";
+  if (code >= 95 && code <= 99) return "STORM";
+  return "--";
+}
+
+int td_temp_in_unit(int temp_c, int unit) {
+  if (unit != TD_TEMP_F) return temp_c;
+  return ((temp_c * 9) + (temp_c >= 0 ? 2 : -2)) / 5 + 32;
+}
+
+/* ---------- Heart-rate history ---------- */
+
+TdHrStats td_hr_stats(const int16_t *bpm, int n) {
+  TdHrStats st = {0, 0, 0, 0};
+  int sum = 0;
+  for (int i = 0; i < n; i++) {
+    int v = bpm[i];
+    if (v <= 0) continue;
+    if (!st.count || v < st.min) st.min = v;
+    if (!st.count || v > st.max) st.max = v;
+    sum += v;
+    st.count++;
+  }
+  if (st.count) st.avg = (sum + st.count / 2) / st.count;
+  return st;
+}
+
+int td_scale_y(int v, int lo, int hi, int y_top, int y_bottom) {
+  int span = y_bottom - y_top;
+  int margin = span / 10;
+  if (hi <= lo) return (y_top + y_bottom) / 2;
+  if (v < lo) v = lo;
+  if (v > hi) v = hi;
+  return y_bottom - margin - ((v - lo) * (span - 2 * margin)) / (hi - lo);
 }
 
 /* ---------- Health, power, clock, link ---------- */
@@ -337,4 +411,59 @@ const char *td_decision_name(TdDecision d) {
     case TD_DECIDE_SKIP_BATTERY: return "battery";
   }
   return "?";
+}
+
+/* ---------- Shake screen ---------- */
+
+int td_fx_duration(int fx) {
+  return fx == TD_FX_EMERGENCY_HEX ? TD_FX_HEX_MS : TD_FX_SYNC_MS;
+}
+
+int td_fx_max_steps(int fx) {
+  return (2 * td_fx_duration(fx)) / TD_FRAME_MS + 4;
+}
+
+bool td_peek_open(const TdPeek *p) {
+  return p->phase != TD_PEEK_IDLE;
+}
+
+void td_peek_close(TdPeek *p) {
+  p->phase = TD_PEEK_IDLE;
+  p->t_ms = 0;
+  p->steps = 0;
+}
+
+TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms) {
+  if (td_peek_open(p)) {
+    int64_t since = now_ms - p->opened_ms;
+    /* A clock that moved backwards cannot hold the screen open: treat as elapsed. */
+    if (since >= 0 && since < TD_PEEK_DEBOUNCE_MS) return TD_PEEK_NOOP;
+    td_peek_close(p);
+    return TD_PEEK_CLOSE;
+  }
+  if (env->shake != TD_SHAKE_WEATHER && env->shake != TD_SHAKE_HEART) return TD_PEEK_NOOP;
+  p->screen = env->shake;
+  p->fx = env->fx == TD_FX_EMERGENCY_HEX ? TD_FX_EMERGENCY_HEX : TD_FX_SYNC_GRAPH;
+  p->t_ms = 0;
+  p->steps = 0;
+  p->opened_ms = now_ms;
+  bool low = !env->charging && env->battery_pct <= TD_BATT_LOW_PCT;
+  if (env->motion == TD_MOTION_OFF || low) {
+    p->phase = TD_PEEK_HOLD;
+    return TD_PEEK_OPEN_CUT;
+  }
+  p->phase = TD_PEEK_IN;
+  return TD_PEEK_OPEN_FX;
+}
+
+bool td_peek_step(TdPeek *p, int dt_ms) {
+  if (p->phase != TD_PEEK_IN) return false;
+  if (dt_ms < 0 || dt_ms > TD_MAX_DT_MS) dt_ms = TD_FRAME_MS;
+  p->t_ms += dt_ms;
+  p->steps++;
+  if (p->t_ms >= td_fx_duration(p->fx) || p->steps >= td_fx_max_steps(p->fx)) {
+    p->phase = TD_PEEK_HOLD;
+    return false;
+  }
+  return true;
 }

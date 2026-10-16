@@ -36,7 +36,7 @@ static int run_to_end(TdAnim *a, int dt) {
 
 TEST(settings_upgrade_from_1_0_16_pins_animation_default) {
   TdSettings s;
-  int stored[TD_SETTING_COUNT] = {2, 1, 3, 1, 2, 0};
+  int stored[TD_SETTING_COUNT] = {2, 1, 3, 1, 2, 0, 0, 0};
   uint32_t present = 0x1F; /* the five 1.0.16 keys */
   uint32_t write = td_settings_load(&s, stored, present, 1);
   CHECK(s.v[TD_SET_CLOCK] == TD_CLOCK_12H);
@@ -45,26 +45,44 @@ TEST(settings_upgrade_from_1_0_16_pins_animation_default) {
   CHECK(s.v[TD_SET_TEMP_UNIT] == TD_TEMP_F);
   CHECK(s.v[TD_SET_SYNC] == TD_SYNC_BATTERY);
   CHECK(s.v[TD_SET_MOTION] == TD_MOTION_FULL);
-  CHECK(write == (1u << TD_SET_MOTION)); /* only the migrated key is written */
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF);
+  /* only the migrated keys are written */
+  CHECK(write == ((1u << TD_SET_MOTION) | (1u << TD_SET_SHAKE) | (1u << TD_SET_SHAKE_FX)));
 }
 
-TEST(settings_schema2_keeps_user_choice_and_writes_nothing) {
+TEST(settings_schema2_keeps_user_choice_and_adds_shake_off) {
   TdSettings s;
-  int stored[TD_SETTING_COUNT] = {0, 0, 0, 0, 0, TD_MOTION_OFF};
+  int stored[TD_SETTING_COUNT] = {0, 0, 0, 0, 0, TD_MOTION_OFF, 0, 0};
   uint32_t write = td_settings_load(&s, stored, 0x3F, 2);
   CHECK(s.v[TD_SET_MOTION] == TD_MOTION_OFF);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF);
+  CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_SYNC_GRAPH);
+  CHECK(write == ((1u << TD_SET_SHAKE) | (1u << TD_SET_SHAKE_FX)));
+}
+
+TEST(settings_schema3_keeps_shake_choice_and_writes_nothing) {
+  TdSettings s;
+  int stored[TD_SETTING_COUNT] = {0, 0, 0, 0, 0, TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_EMERGENCY_HEX};
+  uint32_t write = td_settings_load(&s, stored, 0xFF, 3);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART);
+  CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_EMERGENCY_HEX);
   CHECK(write == 0);
+  stored[TD_SET_SHAKE] = 3;
+  stored[TD_SET_SHAKE_FX] = 2;
+  td_settings_load(&s, stored, 0xFF, 3);
+  CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_OFF); /* out of range falls back to the default */
+  CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_SYNC_GRAPH);
 }
 
 TEST(settings_fresh_install_and_clamping) {
   TdSettings s;
-  int stored[TD_SETTING_COUNT] = {9, -1, 4, 7, 99, 3};
+  int stored[TD_SETTING_COUNT] = {9, -1, 4, 7, 99, 3, 5, -2};
   uint32_t write = td_settings_load(&s, stored, 0, 0);
   TdSettings d;
   td_settings_defaults(&d);
   CHECK(td_settings_diff(&s, &d) == 0);
-  CHECK(write == (1u << TD_SET_MOTION));
-  td_settings_load(&s, stored, 0x3F, 2); /* every stored value out of range */
+  CHECK(write == ((1u << TD_SET_MOTION) | (1u << TD_SET_SHAKE) | (1u << TD_SET_SHAKE_FX)));
+  td_settings_load(&s, stored, 0xFF, 3); /* every stored value out of range */
   CHECK(td_settings_diff(&s, &d) == 0);
 }
 
@@ -488,9 +506,170 @@ TEST(anim_simulated_day_is_bounded) {
   printf("    simulated day: %d launch sequences, %d MAGI responses\n", boots, magis);
 }
 
+/* ---------- forecast and heart-rate history ---------- */
+
+static TdForecast forecast(int64_t start, int64_t ts, int count) {
+  TdForecast f;
+  memset(&f, 0, sizeof(f));
+  f.start = (int32_t)start;
+  f.ts = (int32_t)ts;
+  f.count = (uint8_t)count;
+  for (int i = 0; i < TD_FC_SLOTS; i++) {
+    f.temp_c[i] = (int8_t)(15 - i);
+    f.code[i] = 3;
+  }
+  return f;
+}
+
+TEST(forecast_skips_past_hours_and_expires) {
+  TdForecast f = forecast(T0, T0, 12);
+  CHECK(td_forecast_first(&f, T0) == 0);
+  CHECK(td_forecast_first(&f, T0 + 59 * MIN) == 0);
+  CHECK(td_forecast_first(&f, T0 + HOUR) == 1);
+  CHECK(td_forecast_shown(&f, 0) == TD_FC_SHOWN);
+  /* stale but not expired: hours gone are dropped, fewer remain */
+  CHECK(td_forecast_first(&f, T0 + 5 * HOUR + 10 * MIN) == 5);
+  CHECK(td_forecast_shown(&f, 5) == TD_FC_SHOWN);
+  CHECK(td_forecast_shown(&f, 9) == 3);
+  /* expired with the weather (6 h): nothing, never a stale forecast as current */
+  CHECK(td_forecast_first(&f, T0 + 6 * HOUR) == -1);
+  CHECK(td_forecast_shown(&f, -1) == 0);
+  /* slot 0 still ahead (phone clock slightly ahead): start at slot 0 */
+  CHECK(td_forecast_first(&f, T0 - 2 * MIN) == 0);
+}
+
+TEST(forecast_missing_or_corrupt_shows_nothing) {
+  TdForecast f;
+  memset(&f, 0, sizeof(f));
+  CHECK(td_forecast_first(&f, T0) == -1);
+  f = forecast(T0, T0, 0);
+  CHECK(td_forecast_first(&f, T0) == -1);
+  f = forecast(T0, T0, TD_FC_SLOTS + 1);
+  CHECK(td_forecast_first(&f, T0) == -1);
+  f = forecast(T0 - 3 * HOUR, T0, 3); /* every hour already past */
+  CHECK(td_forecast_first(&f, T0) == -1);
+  CHECK(td_forecast_first(NULL, T0) == -1);
+}
+
+TEST(forecast_rain_callout_and_labels) {
+  TdForecast f = forecast(T0, T0, 12);
+  CHECK(td_forecast_rain_at(&f, 0) == -1);
+  f.rain_pct[3] = 49;
+  f.rain_pct[4] = 50;
+  CHECK(td_forecast_rain_at(&f, 0) == 4);
+  CHECK(td_forecast_rain_at(&f, 4) == 0);
+  f.rain_pct[4] = 0;
+  f.rain_pct[8] = 90; /* beyond the six shown hours from slot 0 */
+  CHECK(td_forecast_rain_at(&f, 0) == -1);
+  CHECK_STR(td_wmo_label(0), "CLEAR");
+  CHECK_STR(td_wmo_label(3), "CLOUD");
+  CHECK_STR(td_wmo_label(45), "FOG");
+  CHECK_STR(td_wmo_label(61), "RAIN");
+  CHECK_STR(td_wmo_label(81), "RAIN");
+  CHECK_STR(td_wmo_label(73), "SNOW");
+  CHECK_STR(td_wmo_label(95), "STORM");
+  CHECK_STR(td_wmo_label(255), "--");
+  CHECK(td_temp_in_unit(17, TD_TEMP_C) == 17);
+  CHECK(td_temp_in_unit(17, TD_TEMP_F) == 63);
+  CHECK(td_temp_in_unit(-5, TD_TEMP_F) == 23);
+}
+
+TEST(hr_stats_ignore_missing_buckets) {
+  int16_t none[TD_HR_BUCKETS] = {0};
+  TdHrStats st = td_hr_stats(none, TD_HR_BUCKETS);
+  CHECK(st.count == 0);
+  int16_t some[TD_HR_BUCKETS] = {0, 70, 0, 110, 64, 0};
+  st = td_hr_stats(some, TD_HR_BUCKETS);
+  CHECK(st.count == 3);
+  CHECK(st.min == 64 && st.max == 110);
+  CHECK(st.avg == 81);
+  /* scale: higher bpm is higher on screen, inside a 10% margin, flat range centred */
+  int top = td_scale_y(110, 64, 110, 66, 165), bottom = td_scale_y(64, 64, 110, 66, 165);
+  CHECK(top < bottom);
+  CHECK(top >= 66 + 9 && bottom <= 165 - 9);
+  CHECK(td_scale_y(200, 64, 110, 66, 165) == top);
+  CHECK(td_scale_y(70, 70, 70, 66, 165) == (66 + 165) / 2);
+}
+
+/* ---------- shake screen ---------- */
+
+static TdPeekEnv peek_env(int shake, int fx, int motion, int batt) {
+  TdPeekEnv e = {shake, fx, motion, batt, false};
+  return e;
+}
+
+static int peek_run(TdPeek *p, int dt) {
+  int n = 0;
+  while (td_peek_step(p, dt) && n < 10000) n++;
+  return n + 1;
+}
+
+TEST(peek_off_ignores_shakes) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_OFF, TD_FX_SYNC_GRAPH, TD_MOTION_FULL, 80);
+  CHECK(td_peek_tap(&p, &e, 0) == TD_PEEK_NOOP);
+  CHECK(!td_peek_open(&p));
+  CHECK(!td_peek_step(&p, TD_FRAME_MS));
+}
+
+TEST(peek_opens_with_chosen_transition_then_holds) {
+  for (int fx = TD_FX_SYNC_GRAPH; fx <= TD_FX_EMERGENCY_HEX; fx++) {
+    TdPeek p = {0};
+    TdPeekEnv e = peek_env(TD_SHAKE_HEART, fx, TD_MOTION_SUBTLE, 80);
+    CHECK(td_peek_tap(&p, &e, 1000) == TD_PEEK_OPEN_FX);
+    CHECK(p.phase == TD_PEEK_IN && p.fx == fx && p.screen == TD_SHAKE_HEART);
+    int steps = peek_run(&p, TD_FRAME_MS);
+    CHECK(p.phase == TD_PEEK_HOLD);
+    CHECK(steps == (td_fx_duration(fx) + TD_FRAME_MS - 1) / TD_FRAME_MS);
+  }
+}
+
+TEST(peek_cuts_without_frames_when_motion_off_or_battery_low) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_WEATHER, TD_FX_EMERGENCY_HEX, TD_MOTION_OFF, 80);
+  CHECK(td_peek_tap(&p, &e, 0) == TD_PEEK_OPEN_CUT);
+  CHECK(p.phase == TD_PEEK_HOLD);
+  CHECK(!td_peek_step(&p, TD_FRAME_MS));
+  td_peek_close(&p);
+  e = peek_env(TD_SHAKE_WEATHER, TD_FX_SYNC_GRAPH, TD_MOTION_FULL, TD_BATT_LOW_PCT);
+  CHECK(td_peek_tap(&p, &e, 0) == TD_PEEK_OPEN_CUT);
+  td_peek_close(&p);
+  e.charging = true;
+  CHECK(td_peek_tap(&p, &e, 0) == TD_PEEK_OPEN_FX);
+}
+
+TEST(peek_one_shake_burst_does_not_close_it) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_WEATHER, TD_FX_SYNC_GRAPH, TD_MOTION_FULL, 80);
+  CHECK(td_peek_tap(&p, &e, 5000) == TD_PEEK_OPEN_FX);
+  CHECK(td_peek_tap(&p, &e, 5200) == TD_PEEK_NOOP);
+  CHECK(td_peek_tap(&p, &e, 5000 + TD_PEEK_DEBOUNCE_MS - 1) == TD_PEEK_NOOP);
+  CHECK(td_peek_open(&p));
+  CHECK(td_peek_tap(&p, &e, 5000 + TD_PEEK_DEBOUNCE_MS) == TD_PEEK_CLOSE);
+  CHECK(!td_peek_open(&p));
+  CHECK(!td_peek_step(&p, TD_FRAME_MS));
+  /* a clock that jumped backwards cannot keep it open */
+  CHECK(td_peek_tap(&p, &e, 9000) == TD_PEEK_OPEN_FX);
+  CHECK(td_peek_tap(&p, &e, 1000) == TD_PEEK_CLOSE);
+}
+
+TEST(peek_transition_always_terminates) {
+  int dts[] = {0, 1, -50, 100000, TD_FRAME_MS};
+  for (unsigned i = 0; i < sizeof(dts) / sizeof(dts[0]); i++) {
+    for (int fx = TD_FX_SYNC_GRAPH; fx <= TD_FX_EMERGENCY_HEX; fx++) {
+      TdPeek p = {0};
+      TdPeekEnv e = peek_env(TD_SHAKE_HEART, fx, TD_MOTION_FULL, 80);
+      td_peek_tap(&p, &e, 0);
+      CHECK(peek_run(&p, dts[i]) <= td_fx_max_steps(fx));
+      CHECK(p.phase == TD_PEEK_HOLD);
+    }
+  }
+}
+
 int main(void) {
   RUN(settings_upgrade_from_1_0_16_pins_animation_default);
-  RUN(settings_schema2_keeps_user_choice_and_writes_nothing);
+  RUN(settings_schema2_keeps_user_choice_and_adds_shake_off);
+  RUN(settings_schema3_keeps_shake_choice_and_writes_nothing);
   RUN(settings_fresh_install_and_clamping);
   RUN(settings_identical_resend_needs_no_flash_write);
   RUN(weather_freshness_bands);
@@ -519,6 +698,15 @@ int main(void) {
   RUN(anim_timer_always_terminates);
   RUN(anim_checks_resolve_in_module_order);
   RUN(anim_simulated_day_is_bounded);
+  RUN(forecast_skips_past_hours_and_expires);
+  RUN(forecast_missing_or_corrupt_shows_nothing);
+  RUN(forecast_rain_callout_and_labels);
+  RUN(hr_stats_ignore_missing_buckets);
+  RUN(peek_off_ignores_shakes);
+  RUN(peek_opens_with_chosen_transition_then_holds);
+  RUN(peek_cuts_without_frames_when_motion_off_or_battery_low);
+  RUN(peek_one_shake_burst_does_not_close_it);
+  RUN(peek_transition_always_terminates);
   printf("C logic: %d checks, %d failures\n", s_checks, s_failures);
   return s_failures ? 1 : 0;
 }
