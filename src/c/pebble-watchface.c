@@ -1198,8 +1198,9 @@ static void canvas_update_proc(Layer *layer, GContext *ctx) {
   switch (s_peek.phase) {
     case TD_PEEK_HOLD: draw_peek_screen(ctx, 99); return;
     case TD_PEEK_IN:
-      if (s_peek.fx == TD_FX_EMERGENCY_HEX) draw_fx_hex(ctx, bounds, s_peek.t_ms);
-      else draw_fx_sync(ctx, bounds, s_peek.t_ms);
+    case TD_PEEK_OUT: /* the return plays the opening backwards */
+      if (s_peek.fx == TD_FX_EMERGENCY_HEX) draw_fx_hex(ctx, bounds, td_peek_frame_ms(&s_peek));
+      else draw_fx_sync(ctx, bounds, td_peek_frame_ms(&s_peek));
       return;
     default: draw_face(ctx, bounds); return;
   }
@@ -1456,9 +1457,44 @@ static void peek_close(const char *why) {
   }
 }
 
+static void peek_enter_hold(void);
+static void peek_step_callback(void *context);
+
+static TdPeekEnv peek_env(void) {
+  return (TdPeekEnv){
+    .shake = s_settings.v[TD_SET_SHAKE],
+    .fx = s_settings.v[TD_SET_SHAKE_FX],
+    .motion = s_settings.v[TD_SET_MOTION],
+    .battery_pct = s_battery_pct,
+    .charging = s_battery_charging,
+  };
+}
+
+/* Applies a return decision from td_peek_dismiss or td_peek_tap. */
+static void peek_apply_close(TdPeekEvent ev, const char *why) {
+  if (ev == TD_PEEK_CLOSE) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "TD peek close reason=%s cut;", why);
+    peek_cancel_timers();
+    mark_dirty();
+  } else if (ev == TD_PEEK_CLOSE_FX) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "TD peek close reason=%s fx=%d;", why, s_peek.fx);
+    if (s_peek_hold_timer) {
+      app_timer_cancel(s_peek_hold_timer);
+      s_peek_hold_timer = NULL;
+    }
+    /* Reversing mid-opening reuses the running frame timer. */
+    if (!s_peek_timer) {
+      s_peek_last_ms = now_ms();
+      s_peek_timer = app_timer_register(TD_FRAME_MS, peek_step_callback, NULL);
+    }
+    mark_dirty();
+  }
+}
+
 static void peek_hold_expired(void *context) {
   s_peek_hold_timer = NULL;
-  peek_close("timeout");
+  TdPeekEnv env = peek_env();
+  peek_apply_close(td_peek_dismiss(&s_peek, &env), "timeout");
 }
 
 static void peek_enter_hold(void) {
@@ -1477,21 +1513,17 @@ static void peek_step_callback(void *context) {
   s_peek_last_ms = now;
   if (td_peek_step(&s_peek, dt)) {
     s_peek_timer = app_timer_register(TD_FRAME_MS, peek_step_callback, NULL);
-  } else {
+  } else if (s_peek.phase == TD_PEEK_HOLD) {
     peek_enter_hold();
+  } else {
+    APP_LOG(APP_LOG_LEVEL_INFO, "TD peek closed steps=%d;", s_peek.steps);
   }
   mark_dirty();
 }
 
 static void tap_handler(AccelAxisType axis, int32_t direction) {
   if (!s_canvas_layer) return;
-  TdPeekEnv env = {
-    .shake = s_settings.v[TD_SET_SHAKE],
-    .fx = s_settings.v[TD_SET_SHAKE_FX],
-    .motion = s_settings.v[TD_SET_MOTION],
-    .battery_pct = s_battery_pct,
-    .charging = s_battery_charging,
-  };
+  TdPeekEnv env = peek_env();
   TdPeekEvent ev = td_peek_tap(&s_peek, &env, now_ms());
   APP_LOG(APP_LOG_LEVEL_INFO, "TD peek tap event=%d screen=%d fx=%d;", (int)ev, s_peek.screen, s_peek.fx);
   switch (ev) {
@@ -1508,8 +1540,8 @@ static void tap_handler(AccelAxisType axis, int32_t direction) {
       mark_dirty();
       break;
     case TD_PEEK_CLOSE:
-      peek_cancel_timers();
-      mark_dirty();
+    case TD_PEEK_CLOSE_FX:
+      peek_apply_close(ev, "shake");
       break;
     default:
       break;
@@ -1604,7 +1636,10 @@ static void battery_handler(BatteryChargeState state) {
   update_battery(state);
   anim_check_abort("battery");
   /* Same rule as the face animations: no transition frames at critical battery. */
-  if (s_peek.phase == TD_PEEK_IN && battery_state() == TD_BATT_CRITICAL) peek_enter_hold();
+  if (battery_state() == TD_BATT_CRITICAL) {
+    if (s_peek.phase == TD_PEEK_IN) peek_enter_hold();
+    else if (s_peek.phase == TD_PEEK_OUT) peek_close("battery");
+  }
   mark_dirty();
 }
 

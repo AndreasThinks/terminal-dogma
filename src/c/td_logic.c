@@ -438,13 +438,37 @@ void td_peek_close(TdPeek *p) {
   p->steps = 0;
 }
 
+static bool peek_cut(const TdPeekEnv *env) {
+  return env->motion == TD_MOTION_OFF || (!env->charging && env->battery_pct <= TD_BATT_LOW_PCT);
+}
+
+TdPeekEvent td_peek_dismiss(TdPeek *p, const TdPeekEnv *env) {
+  if (p->phase == TD_PEEK_IDLE || p->phase == TD_PEEK_OUT) return TD_PEEK_NOOP;
+  if (peek_cut(env)) {
+    td_peek_close(p);
+    return TD_PEEK_CLOSE;
+  }
+  int dur = td_fx_duration(p->fx);
+  /* Reversing mid-opening continues from the frame on screen. */
+  int t = p->phase == TD_PEEK_IN ? dur - p->t_ms : 0;
+  p->phase = TD_PEEK_OUT;
+  p->t_ms = t < 0 ? 0 : t;
+  p->steps = 0;
+  return TD_PEEK_CLOSE_FX;
+}
+
+int td_peek_frame_ms(const TdPeek *p) {
+  if (p->phase != TD_PEEK_OUT) return p->t_ms;
+  int t = td_fx_duration(p->fx) - p->t_ms;
+  return t < 0 ? 0 : t;
+}
+
 TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms) {
   if (td_peek_open(p)) {
     int64_t since = now_ms - p->opened_ms;
     /* A clock that moved backwards cannot hold the screen open: treat as elapsed. */
     if (since >= 0 && since < TD_PEEK_DEBOUNCE_MS) return TD_PEEK_NOOP;
-    td_peek_close(p);
-    return TD_PEEK_CLOSE;
+    return td_peek_dismiss(p, env);
   }
   if (env->shake != TD_SHAKE_WEATHER && env->shake != TD_SHAKE_HEART) return TD_PEEK_NOOP;
   p->screen = env->shake;
@@ -452,8 +476,7 @@ TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms) {
   p->t_ms = 0;
   p->steps = 0;
   p->opened_ms = now_ms;
-  bool low = !env->charging && env->battery_pct <= TD_BATT_LOW_PCT;
-  if (env->motion == TD_MOTION_OFF || low) {
+  if (peek_cut(env)) {
     p->phase = TD_PEEK_HOLD;
     return TD_PEEK_OPEN_CUT;
   }
@@ -462,12 +485,13 @@ TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms) {
 }
 
 bool td_peek_step(TdPeek *p, int dt_ms) {
-  if (p->phase != TD_PEEK_IN) return false;
+  if (p->phase != TD_PEEK_IN && p->phase != TD_PEEK_OUT) return false;
   if (dt_ms < 0 || dt_ms > TD_MAX_DT_MS) dt_ms = TD_FRAME_MS;
   p->t_ms += dt_ms;
   p->steps++;
   if (p->t_ms >= td_fx_duration(p->fx) || p->steps >= td_fx_max_steps(p->fx)) {
-    p->phase = TD_PEEK_HOLD;
+    if (p->phase == TD_PEEK_OUT) td_peek_close(p);
+    else p->phase = TD_PEEK_HOLD;
     return false;
   }
   return true;

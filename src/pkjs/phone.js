@@ -344,7 +344,7 @@ function buildConfigHtml(settings) {
     'BIO shows the watch\'s most recent heart-rate reading (at most 15 minutes old), or -- when there is none. ' +
     'Animations play when the face is first shown (at most once every 30 minutes) and briefly when the phone link or weather recovers. ' +
     'Off uses no animation timers at all. ' +
-    'Shake to show opens the forecast or a heart-rate graph for 10 seconds; shake again to close it. ' +
+    'Shake to show opens the forecast or a heart-rate graph for 10 seconds, then plays the transition back to the face; shake again to return sooner. ' +
     'With animations Off or a low battery it opens without the transition.</div>' +
     '</div><script>' +
     'document.getElementById("save").onclick=function(){var s={};' + JSON.stringify(SETTING_NAMES) +

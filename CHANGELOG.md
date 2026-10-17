@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.21
+
+- The shake screen now returns to the face with the same transition played in reverse, after the 10-second hold or on a second shake. A shake during the opening reverses it from the frame on screen.
+- With animations Off or a low battery the return is a hard cut, as the opening is.
+
 ## 1.0.20
 
 - Fix forecast recovery when an older phone cache contains a current temperature but no hourly forecast; it now fetches the missing forecast instead of treating the cache as complete.
