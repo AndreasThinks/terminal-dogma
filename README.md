@@ -48,8 +48,9 @@ The default is **Heart rate, last 3 hours** with the **Sync Graph** transition. 
 - **Heart rate.** The current BPM as on the BIO monitor, plus 18 ten-minute averages over the last three hours from Pebble Health, with max, min, average and how many slots had a reading. Slots without a reading are gaps in the line, never filled in. With no readings at all the screen says `NO HEART RATE DATA`.
 - **Sync Graph (about 1.65 s).** A ruled frame opens out of the face, phase-shifted sync waves sweep through it under the EVA 01 badge, then collapse onto the screen's own line (the heart-rate trace, or the tops of the forecast bars) before the labels type in.
 - **Emergency Hex (about 1.45 s).** Red EMERGENCY hexagons cascade in from the right, with the clock, WARNING and NERV panels among them. They strobe, then drop away left to right to show the screen.
-- The screen returns to the face after 10 seconds. Shake again to close it sooner. Taps in the first 1.5 seconds are ignored, because one shake fires several.
-- With animations **Off**, or at 20% battery or less, the screen opens with a hard cut and no transition frames. The transition also cuts to the screen if the battery reaches critical while it plays.
+- After 10 seconds the same transition plays in reverse back to the face. Shake again to start the return sooner; shaking while the opening is still playing reverses it from the frame on screen. Taps in the first 1.5 seconds are ignored, because one shake fires several.
+- The Back button cannot close it: Pebble does not send button presses to watchfaces.
+- With animations **Off**, or at 20% battery or less, the screen opens and closes with a hard cut and no transition frames. If the battery reaches critical while a transition plays, it cuts to where it was going.
 - A running MAGI sequence is cancelled when the screen opens, and recoveries do not animate while it is showing.
 - The accelerometer tap service is only subscribed while Shake to show is on. Health is read once when the screen opens, not every frame.
 

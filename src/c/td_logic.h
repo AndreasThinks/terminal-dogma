@@ -192,20 +192,23 @@ const char *td_decision_name(TdDecision d);
 
 /* ---------- Shake screen ----------
  * A wrist shake opens the chosen screen (weather or heart rate) through one of two
- * transitions, holds it, then returns to the face. A second shake dismisses it. */
+ * transitions, holds it, then plays the same transition in reverse back to the face.
+ * A second shake starts that return early. */
 #define TD_PEEK_HOLD_MS 10000   /* screen returns to the face after this */
 #define TD_PEEK_DEBOUNCE_MS 1500 /* one shake fires several taps; ignore them this long */
 #define TD_FX_SYNC_MS 1650
 #define TD_FX_HEX_MS 1450
 
-typedef enum { TD_PEEK_IDLE, TD_PEEK_IN, TD_PEEK_HOLD } TdPeekPhase;
-typedef enum { TD_PEEK_NOOP, TD_PEEK_OPEN_FX, TD_PEEK_OPEN_CUT, TD_PEEK_CLOSE } TdPeekEvent;
+typedef enum { TD_PEEK_IDLE, TD_PEEK_IN, TD_PEEK_HOLD, TD_PEEK_OUT } TdPeekPhase;
+typedef enum {
+  TD_PEEK_NOOP, TD_PEEK_OPEN_FX, TD_PEEK_OPEN_CUT, TD_PEEK_CLOSE, TD_PEEK_CLOSE_FX
+} TdPeekEvent;
 
 typedef struct {
   TdPeekPhase phase;
   int screen;          /* TD_SHAKE_WEATHER or TD_SHAKE_HEART while open */
-  int fx;              /* TD_FX_* while in TD_PEEK_IN */
-  int t_ms;            /* transition clock */
+  int fx;              /* TD_FX_* while in TD_PEEK_IN or TD_PEEK_OUT */
+  int t_ms;            /* transition clock; TD_PEEK_OUT draws the IN frame at duration - t_ms */
   int steps;
   int64_t opened_ms;   /* wall clock at opening, for the debounce */
 } TdPeek;
@@ -218,11 +221,19 @@ typedef struct {
   bool charging;
 } TdPeekEnv;
 
-/* A tap arrived at wall-clock now_ms. Opens (with or without the transition) or closes. */
+/* A tap arrived at wall-clock now_ms. Opens (with or without the transition) or starts the
+ * return. Taps during the debounce or while already returning are ignored. */
 TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms);
+/* Starts the return to the face: TD_PEEK_CLOSE_FX plays the transition in reverse (from the
+ * current frame when the opening is still playing); TD_PEEK_CLOSE is a hard cut, used with
+ * animations Off or a low battery. TD_PEEK_NOOP when idle or already returning. */
+TdPeekEvent td_peek_dismiss(TdPeek *p, const TdPeekEnv *env);
 /* Advances the transition by dt_ms (guarded like td_anim_step). Returns true while
- * another frame is needed; on false the screen is in TD_PEEK_HOLD. */
+ * another frame is needed; on false the screen is in TD_PEEK_HOLD after opening, or
+ * TD_PEEK_IDLE after returning. */
 bool td_peek_step(TdPeek *p, int dt_ms);
+/* The opening frame to draw: t_ms while opening, the mirrored time while returning. */
+int td_peek_frame_ms(const TdPeek *p);
 void td_peek_close(TdPeek *p);
 int td_fx_duration(int fx);
 int td_fx_max_steps(int fx);

@@ -54,7 +54,7 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 
 - Host tests pass.
 - Not yet built with the Pebble SDK or run in the emulator: the SDK download was blocked where this was written. The drawing code was compiled with `-Wall -Wextra -Werror` against a hand-written stand-in for `pebble.h` and rendered frame by frame on the desktop to check layout and timing. That checks the code paths, not real fonts or SDK signatures.
-- Before release: `pebble build`, then in the Emery emulator turn Shake to show on, inject weather with forecast keys, and trigger shakes with `pebble emu-tap`. Check both transitions, both screens, the 10-second return and the second-shake close. On a real watch, check how easily a shake (and nothing else) opens it, and the HR history from Health.
+- Before release: `pebble build`, then in the Emery emulator turn Shake to show on, inject weather with forecast keys, and trigger shakes with `pebble emu-tap`. Check both transitions, both screens, the reverse transition after 10 seconds and on a second shake (including one during the opening), and the hard-cut return with animations Off. On a real watch, check how easily a shake (and nothing else) opens it, and the HR history from Health.
 
 ## 1.0.18 release verification
 

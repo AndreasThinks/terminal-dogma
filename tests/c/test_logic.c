@@ -659,12 +659,64 @@ TEST(peek_one_shake_burst_does_not_close_it) {
   CHECK(td_peek_tap(&p, &e, 5200) == TD_PEEK_NOOP);
   CHECK(td_peek_tap(&p, &e, 5000 + TD_PEEK_DEBOUNCE_MS - 1) == TD_PEEK_NOOP);
   CHECK(td_peek_open(&p));
-  CHECK(td_peek_tap(&p, &e, 5000 + TD_PEEK_DEBOUNCE_MS) == TD_PEEK_CLOSE);
+  CHECK(td_peek_tap(&p, &e, 5000 + TD_PEEK_DEBOUNCE_MS) == TD_PEEK_CLOSE_FX);
+  CHECK(p.phase == TD_PEEK_OUT);
+  CHECK(td_peek_tap(&p, &e, 9000) == TD_PEEK_NOOP); /* already returning */
+  peek_run(&p, TD_FRAME_MS);
   CHECK(!td_peek_open(&p));
   CHECK(!td_peek_step(&p, TD_FRAME_MS));
   /* a clock that jumped backwards cannot keep it open */
   CHECK(td_peek_tap(&p, &e, 9000) == TD_PEEK_OPEN_FX);
-  CHECK(td_peek_tap(&p, &e, 1000) == TD_PEEK_CLOSE);
+  CHECK(td_peek_tap(&p, &e, 1000) == TD_PEEK_CLOSE_FX);
+}
+
+TEST(peek_return_plays_the_same_transition_backwards) {
+  for (int fx = TD_FX_SYNC_GRAPH; fx <= TD_FX_EMERGENCY_HEX; fx++) {
+    TdPeek p = {0};
+    TdPeekEnv e = peek_env(TD_SHAKE_WEATHER, fx, TD_MOTION_FULL, 80);
+    td_peek_tap(&p, &e, 0);
+    peek_run(&p, TD_FRAME_MS);
+    CHECK(td_peek_dismiss(&p, &e) == TD_PEEK_CLOSE_FX); /* the hold timeout */
+    CHECK(p.phase == TD_PEEK_OUT && p.fx == fx);
+    /* first return frame is the last opening frame; it ends on the face */
+    CHECK(td_peek_frame_ms(&p) == td_fx_duration(fx));
+    int last = td_peek_frame_ms(&p);
+    bool backwards = true;
+    while (td_peek_step(&p, TD_FRAME_MS)) {
+      if (td_peek_frame_ms(&p) >= last) backwards = false;
+      last = td_peek_frame_ms(&p);
+    }
+    CHECK(backwards);
+    CHECK(p.phase == TD_PEEK_IDLE);
+    CHECK(td_peek_dismiss(&p, &e) == TD_PEEK_NOOP);
+  }
+}
+
+TEST(peek_return_mid_opening_reverses_from_the_frame_on_screen) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_HEART, TD_FX_SYNC_GRAPH, TD_MOTION_FULL, 80);
+  td_peek_tap(&p, &e, 0);
+  for (int i = 0; i < 20; i++) td_peek_step(&p, TD_FRAME_MS);
+  int shown = td_peek_frame_ms(&p);
+  CHECK(td_peek_tap(&p, &e, TD_PEEK_DEBOUNCE_MS) == TD_PEEK_CLOSE_FX);
+  CHECK(td_peek_frame_ms(&p) == shown);
+  int steps = peek_run(&p, TD_FRAME_MS);
+  CHECK(steps <= shown / TD_FRAME_MS + 1);
+  CHECK(!td_peek_open(&p));
+}
+
+TEST(peek_return_cuts_when_motion_off_or_battery_low) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_WEATHER, TD_FX_EMERGENCY_HEX, TD_MOTION_FULL, 80);
+  td_peek_tap(&p, &e, 0);
+  peek_run(&p, TD_FRAME_MS);
+  e.battery_pct = TD_BATT_LOW_PCT; /* drained while the screen was up */
+  CHECK(td_peek_dismiss(&p, &e) == TD_PEEK_CLOSE);
+  CHECK(!td_peek_open(&p));
+  e = peek_env(TD_SHAKE_WEATHER, TD_FX_EMERGENCY_HEX, TD_MOTION_OFF, 80);
+  td_peek_tap(&p, &e, 0);
+  CHECK(td_peek_tap(&p, &e, TD_PEEK_DEBOUNCE_MS) == TD_PEEK_CLOSE);
+  CHECK(!td_peek_open(&p));
 }
 
 TEST(peek_transition_always_terminates) {
@@ -676,6 +728,9 @@ TEST(peek_transition_always_terminates) {
       td_peek_tap(&p, &e, 0);
       CHECK(peek_run(&p, dts[i]) <= td_fx_max_steps(fx));
       CHECK(p.phase == TD_PEEK_HOLD);
+      CHECK(td_peek_dismiss(&p, &e) == TD_PEEK_CLOSE_FX);
+      CHECK(peek_run(&p, dts[i]) <= td_fx_max_steps(fx));
+      CHECK(p.phase == TD_PEEK_IDLE);
     }
   }
 }
@@ -721,6 +776,9 @@ int main(void) {
   RUN(peek_opens_with_chosen_transition_then_holds);
   RUN(peek_cuts_without_frames_when_motion_off_or_battery_low);
   RUN(peek_one_shake_burst_does_not_close_it);
+  RUN(peek_return_plays_the_same_transition_backwards);
+  RUN(peek_return_mid_opening_reverses_from_the_frame_on_screen);
+  RUN(peek_return_cuts_when_motion_off_or_battery_low);
   RUN(peek_transition_always_terminates);
   printf("C logic: %d checks, %d failures\n", s_checks, s_failures);
   return s_failures ? 1 : 0;
