@@ -4,6 +4,10 @@ A NERV / Evangelion-inspired Pebble Time 2 watchface for **Emery** devices, 200Ã
 
 The face is built as a dense MAGI-style HUD: large readable time, NERV logo block, PWR chevrons, BIO monitor, configurable lower data modules, live weather, and a slanted SYNC rail.
 
+- **Source:** [AndreasThinks/terminal-dogma](https://github.com/AndreasThinks/terminal-dogma)
+- **Pebble Store:** [Terminal Dogma](https://apps.repebble.com/83a45005b95f438590f63b26)
+- **Latest published version:** 1.0.21
+
 ![Terminal Dogma Emery screenshot](emery_screenshot.png)
 
 ## Features
@@ -128,6 +132,10 @@ Notes:
 - Re-publishing the same version fails. Always bump the version first, and check the latest Store version before choosing it.
 - Screenshot filenames must start with the platform name, e.g. `emery_screenshot.png`.
 - `pebble publish --description` does not update the public description for an existing app. It is effectively new-app metadata. Use the dashboard for existing app description edits.
+
+## License
+
+There is no `LICENSE` file. Public repository visibility does not itself grant an open-source license; ask before reusing or redistributing the code or included artwork.
 
 ## Development notes
 
