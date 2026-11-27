@@ -21,6 +21,8 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - At 10% or less it becomes an inverted red plate.
   - `CHG 40%` shows while charging. `EXT 100%` shows when plugged in but not charging.
 - Phone link: the `MAGI` tag becomes `LINK LOST` while the Pebble app is disconnected.
+  - Optional **Phone disconnect alert** (off by default): if the link stays down for 10 seconds the watch buzzes twice, and `LINK LOST` shows as an inverted yellow plate for the first minute. It never buzzes during Quiet Time, and a link back within 10 seconds stays silent.
+- Optional **Second time zone** (off by default): the label above the time reads `LOCAL TIME // TYO 04:05` (or `PM NYC 2:05PM` in 12-hour mode). Choose from 17 cities. The phone works out the city's current UTC offset, daylight saving included, and refreshes it with each weather update.
 - Quiet Time: a cyan crescent moon and `QUIET` tag sits in the top bar while Quiet Time is on. It is checked every minute, so it can lag a toggle by up to a minute.
 - Honest health data:
   - BIO shows the firmware's filtered heart rate. The SDK guarantees it is at most 15 minutes old.
@@ -34,6 +36,7 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - The watch keeps the last reading and its observation time, so a relaunch does not blank it.
   - After 60 minutes without an update it turns grey and is labelled `STALE`.
   - After 6 hours it shows `--°`.
+  - While the reading is fresh, the column label shows the current hour's condition from the forecast (`CLEAR`, `CLOUD`, `FOG`, `RAIN`, `SNOW`, `STORM`) in yellow instead of `WEATHER`.
 - Weather unit setting: Celsius (`18°C`) or Fahrenheit (`64°F`).
 - Configurable HUD accent colour: NERV red, Amber, Green, Cyan.
 - Configurable SYNC rail source:
@@ -41,19 +44,22 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - **Steps progress:** fills toward a 10,000-step daily goal. It stays empty without Health data.
   - **Battery level:** mirrors the watch battery percentage.
   - **Aesthetic diagnostic:** fixed at 85% for pure HUD flavour.
+  - **Steps vs typical day:** fills with today's steps against the watch's own average for a whole weekday or weekend day. A yellow caret and pad mark where you usually are by this time. It stays empty without Health averages.
 - Transitions: **Off**, **Subtle** or **Full**, set in the settings page. Full is the default. Details are below.
-- Shake to show: shake your wrist to open the heart-rate graph by default, or choose the hourly forecast in settings. The default transition is Sync Graph. Details are below.
+- Shake to show: shake your wrist to open the heart-rate graph by default, or choose the hourly forecast or today's steps in settings. The default transition is Sync Graph. Details are below.
 
 ## Shake to show
 
-The default is **Heart rate, last 3 hours** with the **Sync Graph** transition. In settings, choose **Off**, **Weather, next 6 hours**, or **Heart rate, last 3 hours**. **Shake transition** picks **Sync Graph** or **Emergency Hex**. Upgrading from 1.0.19 moves its old Off default to Heart rate; an explicit Weather choice remains unchanged.
+The default is **Heart rate, last 3 hours** with the **Sync Graph** transition. In settings, choose **Off**, **Weather, next 6 hours**, **Heart rate, last 3 hours**, or **Steps, today**. **Shake transition** picks **Sync Graph** or **Emergency Hex**. Upgrading from 1.0.19 moves its old Off default to Heart rate; an explicit Weather choice remains unchanged.
 
-- **Weather.** The current temperature, the condition for this hour, the first hour with at least a 50% chance of rain (or `DRY 6H`), and six hourly bars with temperature and rain chance. Hours already past are dropped, so an older forecast shows fewer bars. The forecast follows the same freshness rules as the weather reading: `STALE` after an hour, and `NO FORECAST` once it expires at six hours.
+- **Weather.** The current temperature, the condition for this hour, the first hour with at least a 50% chance of rain (or `DRY 6H`), and six hourly bars with temperature and rain chance. Hours already past are dropped, so an older forecast shows fewer bars. The forecast follows the same freshness rules as the weather reading: `STALE` after an hour, and `NO FORECAST` once it expires at six hours. Beside `PRECIP` it shows the next sunrise or sunset. The phone works these out from your location, looked up at most once a day (no extra network request), and they are hidden during polar day or night.
+- **Steps.** Today's steps, your typical count by now and how far ahead or behind you are, one bar per hour since midnight, walked distance (miles with Fahrenheit, otherwise kilometres) and active minutes. Without Health data it says `NO STEP DATA`.
 - **Heart rate.** The current BPM as on the BIO monitor, plus 18 ten-minute averages over the last three hours from Pebble Health, with max, min, average and how many slots had a reading. Slots without a reading are gaps in the line, never filled in. With no readings at all the screen says `NO HEART RATE DATA`.
-- **Sync Graph (about 1.65 s).** A ruled frame opens out of the face, phase-shifted sync waves sweep through it under the EVA 01 badge, then collapse onto the screen's own line (the heart-rate trace, or the tops of the forecast bars) before the labels type in.
+- **Sync Graph (about 1.65 s).** A ruled frame opens out of the face, phase-shifted sync waves sweep through it under the EVA 01 badge, then collapse onto the screen's own line (the heart-rate trace, or the tops of the forecast or step bars) before the labels type in.
 - **Emergency Hex (about 1.45 s).** Red EMERGENCY hexagons cascade in from the right, with the clock, WARNING and NERV panels among them. They strobe, then drop away left to right to show the screen.
 - After 10 seconds the same transition plays in reverse back to the face. Shake again to start the return sooner; shaking while the opening is still playing reverses it from the frame on screen. Taps in the first 1.5 seconds are ignored, because one shake fires several.
 - The Back button cannot close it: Pebble does not send button presses to watchfaces.
+- Quick View closes it, so the face can switch to its compact layout instead of the card covering the screen's lower rows.
 - With animations **Off**, or at 20% battery or less, the screen opens and closes with a hard cut and no transition frames. If the battery reaches critical while a transition plays, it cuts to where it was going.
 - A running MAGI sequence is cancelled when the screen opens, and recoveries do not animate while it is showing.
 - The accelerometer tap service is only subscribed while Shake to show is on. Health is read once when the screen opens, not every frame.

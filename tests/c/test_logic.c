@@ -67,7 +67,7 @@ TEST(settings_schema3_keeps_shake_choice_and_writes_nothing) {
   CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART);
   CHECK(s.v[TD_SET_SHAKE_FX] == TD_FX_EMERGENCY_HEX);
   CHECK(write == 0);
-  stored[TD_SET_SHAKE] = 3;
+  stored[TD_SET_SHAKE] = TD_SHAKE_STEPS + 1;
   stored[TD_SET_SHAKE_FX] = 2;
   write = td_settings_load(&s, stored, 0xFF, 3);
   CHECK(s.v[TD_SET_SHAKE] == TD_SHAKE_HEART); /* invalid and old default fall back to HR */
@@ -757,6 +757,112 @@ TEST(peek_transition_always_terminates) {
   }
 }
 
+/* ---------- 1.0.23 additions ---------- */
+
+TEST(settings_schema4_adds_alert_and_second_zone_off) {
+  TdSettings s;
+  int stored[TD_SETTING_COUNT] = {0, 0, 0, 0, 0, TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_SYNC_GRAPH};
+  uint32_t write = td_settings_load(&s, stored, 0xFF, 4);
+  CHECK(s.v[TD_SET_LINK_VIBE] == TD_VIBE_OFF);
+  CHECK(s.v[TD_SET_TZ2] == 0);
+  CHECK(write == 0);
+  CHECK(td_setting_clamp(TD_SET_SYNC, TD_SYNC_PACE) == TD_SYNC_PACE);
+  CHECK(td_setting_clamp(TD_SET_SHAKE, TD_SHAKE_STEPS) == TD_SHAKE_STEPS);
+  CHECK(td_setting_clamp(TD_SET_LINK_VIBE, 2) == TD_VIBE_OFF);
+  CHECK(td_setting_clamp(TD_SET_TZ2, TD_TZ2_CITY_COUNT - 1) == TD_TZ2_CITY_COUNT - 1);
+  CHECK(td_setting_clamp(TD_SET_TZ2, TD_TZ2_CITY_COUNT) == 0);
+}
+
+TEST(pace_rail_and_text) {
+  TdPace p = {true, 6420, 7100, 8000};
+  CHECK(td_pace_fill_pct(&p) == 80);
+  CHECK(td_pace_marker_pct(&p) == 88);
+  char buf[24];
+  td_format_pace(buf, sizeof(buf), &p);
+  CHECK_STR(buf, "680 BEHIND");
+  p.today = 8300;
+  td_format_pace(buf, sizeof(buf), &p);
+  CHECK_STR(buf, "1,200 AHEAD");
+  CHECK(td_pace_fill_pct(&p) == 100);
+  p.today = 7130; /* within 1% */
+  td_format_pace(buf, sizeof(buf), &p);
+  CHECK_STR(buf, "ON PACE");
+  TdPace none = {false, 6420, 0, 0};
+  CHECK(td_pace_fill_pct(&none) == 0);
+  CHECK(td_pace_marker_pct(&none) == -1);
+  td_format_pace(buf, sizeof(buf), &none);
+  CHECK_STR(buf, "--");
+}
+
+TEST(second_zone_label) {
+  char buf[16];
+  int64_t t = 1764270300; /* 2025-11-27 19:05 UTC */
+  td_format_tz2(buf, sizeof(buf), 8, t, 540, true);
+  CHECK_STR(buf, "TYO 04:05");
+  td_format_tz2(buf, sizeof(buf), 15, t, -300, false);
+  CHECK_STR(buf, "NYC 2:05PM");
+  td_format_tz2(buf, sizeof(buf), 5, t, 330, true);
+  CHECK_STR(buf, "DEL 00:35");
+  td_format_tz2(buf, sizeof(buf), 0, t, 0, true);
+  CHECK_STR(buf, "");
+  td_format_tz2(buf, sizeof(buf), 8, t, 15 * 60, true);
+  CHECK_STR(buf, "");
+  CHECK_STR(td_tz2_label(TD_TZ2_CITY_COUNT), "");
+}
+
+TEST(sun_next_event) {
+  bool set = false;
+  CHECK(td_sun_next(1000, 2000, 500, &set) == 1000 && !set);
+  CHECK(td_sun_next(1000, 2000, 1500, &set) == 2000 && set);
+  CHECK(td_sun_next(3000, 2000, 1500, &set) == 2000 && set);
+  CHECK(td_sun_next(1000, 2000, 2500, &set) == 0);
+  CHECK(td_sun_next(0, 0, 100, &set) == 0);
+}
+
+TEST(link_alert_plate_and_buzz) {
+  TdLink l = {true, 0};
+  td_link_update(&l, false, T0);
+  CHECK(td_link_alert_showing(&l, T0));
+  CHECK(td_link_alert_showing(&l, T0 + TD_LINK_ALERT_SHOW_S - 1));
+  CHECK(!td_link_alert_showing(&l, T0 + TD_LINK_ALERT_SHOW_S));
+  CHECK(td_link_should_buzz(&l, TD_VIBE_ON, false));
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, true));  /* Quiet Time */
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_OFF, false));
+  td_link_update(&l, true, T0 + 5);                   /* back before the delayed buzz */
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, false));
+  CHECK(!td_link_alert_showing(&l, T0 + 6));
+}
+
+TEST(peek_opens_steps_screen) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_STEPS, TD_FX_SYNC_GRAPH, TD_MOTION_FULL, 80);
+  CHECK(td_peek_tap(&p, &e, 0) == TD_PEEK_OPEN_FX);
+  CHECK(p.screen == TD_SHAKE_STEPS);
+}
+
+static bool all_glyphs(const char *s) {
+  for (; *s; s++) if (!td_glyph_known(*s)) return false;
+  return true;
+}
+
+/* Every string the watch draws in the 3x5 HUD font must have glyphs (a missing one draws blank). */
+TEST(tiny_font_covers_every_hud_string) {
+  static const char *const fixed[] = {
+    "BIO", "L-01", "L-07", "0", "20", "40", "60", "80", "100", "PRECIP", "SUNSET 12:59PM", "SUNRISE 07:41",
+    "QUIET", "PATTERN ANALYSIS", "SUBJECT", "EMERGENCY", "WARNING", "LOCAL TIME // ACTIVE", "AM", "PM",
+    "BALTHASAR-2", "CASPER-3", "MELCHIOR-1", "LINK", "DATA", "PWR", "DATE", "STEPS", "BATT", "WEATHER", "STALE",
+  };
+  for (unsigned i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
+    if (!all_glyphs(fixed[i])) printf("  missing glyph in \"%s\"\n", fixed[i]);
+    CHECK(all_glyphs(fixed[i]));
+  }
+  for (int i = 0; i < TD_TZ2_CITY_COUNT; i++) CHECK(all_glyphs(td_tz2_label(i)));
+  for (int v = TD_VOTE_PENDING; v <= TD_VOTE_NONE; v++) CHECK(all_glyphs(td_vote_label((TdVote)v)));
+  for (int c = 0; c < 256; c++) CHECK(all_glyphs(td_wmo_label(c)));
+  CHECK(!td_glyph_known('%'));
+  CHECK(td_glyph_row('x', 2) == td_glyph_row('X', 2));
+}
+
 int main(void) {
   RUN(settings_upgrade_from_1_0_16_pins_animation_default);
   RUN(settings_schema2_keeps_user_choice_and_adds_heart_rate_default);
@@ -803,6 +909,13 @@ int main(void) {
   RUN(peek_return_cuts_when_motion_off_or_battery_low);
   RUN(peek_cut_return_is_not_reopened_by_the_same_shake);
   RUN(peek_transition_always_terminates);
+  RUN(settings_schema4_adds_alert_and_second_zone_off);
+  RUN(pace_rail_and_text);
+  RUN(second_zone_label);
+  RUN(sun_next_event);
+  RUN(link_alert_plate_and_buzz);
+  RUN(peek_opens_steps_screen);
+  RUN(tiny_font_covers_every_hud_string);
   printf("C logic: %d checks, %d failures\n", s_checks, s_failures);
   return s_failures ? 1 : 0;
 }

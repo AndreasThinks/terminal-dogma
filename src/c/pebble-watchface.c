@@ -11,7 +11,11 @@
 #define PERSIST_WX_TIME 1012
 #define PERSIST_LAST_FULL 1013
 #define PERSIST_FORECAST 1014
-static const uint32_t s_setting_keys[TD_SETTING_COUNT] = {1001, 1003, 1004, 1005, 1006, 1007, 1008, 1009};
+#define PERSIST_TZ2_OFFSET 1017
+#define PERSIST_SUNRISE 1018
+#define PERSIST_SUNSET 1019
+static const uint32_t s_setting_keys[TD_SETTING_COUNT] = {1001, 1003, 1004, 1005, 1006, 1007, 1008, 1009,
+                                                          1015, 1016};
 
 extern uint32_t MESSAGE_KEY_CLOCK_FORMAT;
 extern uint32_t MESSAGE_KEY_BOTTOM_LAYOUT;
@@ -29,12 +33,17 @@ extern uint32_t MESSAGE_KEY_FORECAST_RAIN;
 extern uint32_t MESSAGE_KEY_FORECAST_CODES;
 extern uint32_t MESSAGE_KEY_SHAKE_SCREEN;
 extern uint32_t MESSAGE_KEY_SHAKE_FX;
+extern uint32_t MESSAGE_KEY_LINK_VIBE;
+extern uint32_t MESSAGE_KEY_TZ2;
+extern uint32_t MESSAGE_KEY_TZ2_OFFSET;
+extern uint32_t MESSAGE_KEY_SUNRISE;
+extern uint32_t MESSAGE_KEY_SUNSET;
 
 /* Settings message keys, in TdSettingId order. */
 #define SETTING_MESSAGE_KEYS { \
   MESSAGE_KEY_CLOCK_FORMAT, MESSAGE_KEY_BOTTOM_LAYOUT, MESSAGE_KEY_ACCENT_COLOR, \
   MESSAGE_KEY_TEMP_UNIT, MESSAGE_KEY_SYNC_SOURCE, MESSAGE_KEY_ANIMATION, \
-  MESSAGE_KEY_SHAKE_SCREEN, MESSAGE_KEY_SHAKE_FX, \
+  MESSAGE_KEY_SHAKE_SCREEN, MESSAGE_KEY_SHAKE_FX, MESSAGE_KEY_LINK_VIBE, MESSAGE_KEY_TZ2, \
 }
 
 static Window *s_main_window;
@@ -71,6 +80,8 @@ static TdWeatherSched s_wx_sched;
 static TdForecast s_fc;
 
 static TdLink s_link;
+static AppTimer *s_link_buzz_timer;  /* delayed disconnect buzz */
+static AppTimer *s_link_plate_timer; /* clears the LINK LOST plate */
 static bool s_is_obstructed;
 static bool s_quiet_time;
 
@@ -95,6 +106,15 @@ static bool s_tap_subscribed;
 static int16_t s_hr_hist[TD_HR_BUCKETS];
 static TdHrStats s_hr_stats;
 static int s_fc_first;
+static int16_t s_step_hist[TD_STEP_HOURS];
+static int s_step_hours;
+static TdReading s_step_dist; /* metres today */
+static TdReading s_step_active; /* active seconds today */
+
+static TdPace s_pace;
+static bool s_tz2_have;
+static int s_tz2_offset; /* minutes east of UTC, from the phone */
+static int64_t s_sunrise, s_sunset;
 
 static GColor color_red(void) { return GColorFromHEX(0xFF2424); }
 static GColor color_amber(void) { return GColorFromHEX(0xFFAA00); }
@@ -194,64 +214,6 @@ static void draw_text_box(GContext *ctx, const char *text, GRect box, GFont font
   graphics_draw_text(ctx, text, font, box, GTextOverflowModeTrailingEllipsis, align, NULL);
 }
 
-static uint8_t glyph_row(char c, int row) {
-  static const uint8_t blank[5] = {0, 0, 0, 0, 0};
-  static const uint8_t A[5] = {2, 5, 7, 5, 5};
-  static const uint8_t B[5] = {6, 5, 6, 5, 6};
-  static const uint8_t C[5] = {7, 4, 4, 4, 7};
-  static const uint8_t D[5] = {6, 5, 5, 5, 6};
-  static const uint8_t E[5] = {7, 4, 6, 4, 7};
-  static const uint8_t F[5] = {7, 4, 6, 4, 4};
-  static const uint8_t G[5] = {7, 4, 5, 5, 7};
-  static const uint8_t H[5] = {5, 5, 7, 5, 5};
-  static const uint8_t I[5] = {7, 2, 2, 2, 7};
-  static const uint8_t K[5] = {5, 5, 6, 5, 5};
-  static const uint8_t L[5] = {4, 4, 4, 4, 7};
-  static const uint8_t M[5] = {5, 7, 7, 5, 5};
-  static const uint8_t N[5] = {6, 5, 5, 5, 5};
-  static const uint8_t O[5] = {7, 5, 5, 5, 7};
-  static const uint8_t P[5] = {6, 5, 6, 4, 4};
-  static const uint8_t Q[5] = {7, 5, 5, 7, 1};
-  static const uint8_t R[5] = {6, 5, 6, 5, 5};
-  static const uint8_t S[5] = {7, 4, 7, 1, 7};
-  static const uint8_t T[5] = {7, 2, 2, 2, 2};
-  static const uint8_t U[5] = {5, 5, 5, 5, 7};
-  static const uint8_t V[5] = {5, 5, 5, 5, 2};
-  static const uint8_t W[5] = {5, 5, 7, 7, 5};
-  static const uint8_t Y[5] = {5, 5, 2, 2, 2};
-  static const uint8_t D0[5] = {7, 5, 5, 5, 7};
-  static const uint8_t D1[5] = {2, 6, 2, 2, 7};
-  static const uint8_t D2[5] = {7, 1, 7, 4, 7};
-  static const uint8_t D3[5] = {7, 1, 7, 1, 7};
-  static const uint8_t D4[5] = {5, 5, 7, 1, 1};
-  static const uint8_t D5[5] = {7, 4, 7, 1, 7};
-  static const uint8_t D6[5] = {7, 4, 7, 5, 7};
-  static const uint8_t D7[5] = {7, 1, 1, 1, 1};
-  static const uint8_t D8[5] = {7, 5, 7, 5, 7};
-  static const uint8_t D9[5] = {7, 5, 7, 1, 7};
-  static const uint8_t DASH[5] = {0, 0, 7, 0, 0};
-  static const uint8_t SLASH[5] = {1, 1, 2, 4, 4};
-
-  const uint8_t *g = blank;
-  switch (c) {
-    case 'A': g = A; break; case 'B': g = B; break; case 'C': g = C; break;
-    case 'D': g = D; break; case 'E': g = E; break; case 'F': g = F; break;
-    case 'G': g = G; break; case 'H': g = H; break;
-    case 'I': g = I; break; case 'K': g = K; break; case 'L': g = L; break;
-    case 'M': g = M; break; case 'N': g = N; break; case 'O': g = O; break;
-    case 'P': g = P; break; case 'Q': g = Q; break; case 'R': g = R; break;
-    case 'S': g = S; break; case 'T': g = T; break; case 'U': g = U; break;
-    case 'V': g = V; break; case 'W': g = W; break;
-    case 'Y': g = Y; break;
-    case '0': g = D0; break; case '1': g = D1; break; case '2': g = D2; break;
-    case '3': g = D3; break; case '4': g = D4; break; case '5': g = D5; break;
-    case '6': g = D6; break; case '7': g = D7; break; case '8': g = D8; break;
-    case '9': g = D9; break; case '-': g = DASH; break; case '/': g = SLASH; break;
-    default: break;
-  }
-  return g[row];
-}
-
 static int tiny_text_width(const char *text, int scale) {
   int len = text ? (int)strlen(text) : 0;
   return len ? ((len * 4) - 1) * scale : 0;
@@ -261,10 +223,8 @@ static void draw_tiny_text(GContext *ctx, const char *text, int x, int y, int sc
   graphics_context_set_fill_color(ctx, color);
   int ps = scale > 0 ? scale : 1;
   for (int i = 0; text && text[i]; i++) {
-    char c = text[i];
-    if (c >= 'a' && c <= 'z') c -= 32;
     for (int row = 0; row < 5; row++) {
-      uint8_t bits = glyph_row(c, row);
+      uint8_t bits = td_glyph_row(text[i], row);
       for (int col = 0; col < 3; col++) {
         if (bits & (1 << (2 - col))) {
           graphics_fill_rect(ctx, GRect(x + (i * 4 + col) * ps, y + row * ps, ps, ps), 0, GCornerNone);
@@ -413,7 +373,15 @@ static void draw_weather_column(GContext *ctx, GRect r) {
   TdWeatherState st = weather_state();
   td_format_weather(buf, sizeof(buf), st, s_wx_temp, s_settings.v[TD_SET_TEMP_UNIT]);
   switch (st) {
-    case TD_WX_FRESH: draw_panel_column(ctx, r, "WEATHER", accent_color(), buf, color_cyan()); break;
+    case TD_WX_FRESH: {
+      /* The current hour's condition from the forecast, when there is one. */
+      int fi = td_forecast_first(&s_fc, time(NULL));
+      const char *cond = fi >= 0 ? td_wmo_label(s_fc.code[fi]) : "--";
+      bool known = cond[0] != '-';
+      draw_panel_column(ctx, r, known ? cond : "WEATHER", known ? GColorChromeYellow : accent_color(), buf,
+                        color_cyan());
+      break;
+    }
     case TD_WX_STALE: draw_panel_column(ctx, r, "STALE", color_grey(), buf, color_grey()); break;
     default: draw_panel_column(ctx, r, "WEATHER", accent_color(), buf, color_grey()); break;
   }
@@ -482,6 +450,7 @@ static int sync_source_percent(void) {
     case TD_SYNC_STEPS: return td_steps_pct(s_steps, STEPS_GOAL);
     case TD_SYNC_BATTERY: return s_battery_pct;
     case TD_SYNC_AESTHETIC: return 85;
+    case TD_SYNC_PACE: return td_pace_fill_pct(&s_pace);
     case TD_SYNC_FRESHNESS:
     default: return td_sync_freshness_pct(s_wx_have, s_wx_ts, time(NULL));
   }
@@ -505,6 +474,10 @@ static void draw_sync_ratio(GContext *ctx, int y) {
   const int gap = 2;
   const int blocks = 18;
   const int lit_blocks = (sync_pct * blocks + 50) / 100;
+  /* Steps vs typical day: a yellow pad and caret mark where you usually are by now. */
+  int marker_pct = s_settings.v[TD_SET_SYNC] == TD_SYNC_PACE ? td_pace_marker_pct(&s_pace) : -1;
+  int marker = marker_pct < 0 ? -1 : (marker_pct * blocks) / 100;
+  if (marker >= blocks) marker = blocks - 1;
 
   graphics_context_set_stroke_width(ctx, 1);
   graphics_context_set_stroke_color(ctx, accent);
@@ -519,10 +492,18 @@ static void draw_sync_ratio(GContext *ctx, int y) {
     GPoint bottom_right = GPoint(bx + block_w, bar_y + block_h);
     GPoint bottom_left = GPoint(bx, bar_y + block_h);
 
+    bool mark = i == marker && shown(B_SYNC_FILL_MS + i * B_SYNC_FILL_STEP);
+    if (mark) {
+      GPoint caret[] = {GPoint(bx + slant - 1, bar_y - 5), GPoint(bx + slant + 7, bar_y - 5),
+                        GPoint(bx + slant + 3, bar_y - 1)};
+      fill_polygon_at(ctx, GPoint(0, 0), caret, 3, color_yellow());
+      graphics_context_set_stroke_color(ctx, color_yellow());
+    }
     graphics_draw_line(ctx, top_left, top_right);
     graphics_draw_line(ctx, top_right, bottom_right);
     graphics_draw_line(ctx, bottom_right, bottom_left);
     graphics_draw_line(ctx, bottom_left, top_left);
+    if (mark) graphics_context_set_stroke_color(ctx, accent);
 
     if (lit) {
       for (int row = 1; row < block_h; row++) {
@@ -669,6 +650,15 @@ static void draw_status_tag(GContext *ctx) {
   if (magi_verdict_showing()) {
     snprintf(buf, sizeof(buf), "MAGI %d/3", td_anim_pass_count(&s_anim));
     draw_text_box(ctx, buf, GRect(4, 1, 80, 12), s_font_chip_small, accent_color(), GTextAlignmentLeft);
+  } else if (!s_link.connected && s_settings.v[TD_SET_LINK_VIBE] == TD_VIBE_ON &&
+             td_link_alert_showing(&s_link, time(NULL)) && !booting()) {
+    /* Inverted plate for the first minute after the loss, with the buzz. */
+    GRect box = GRect(4, 1, 80, 12);
+    GSize sz = graphics_text_layout_get_content_size("LINK LOST", s_font_chip_small, box,
+                                                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft);
+    graphics_context_set_fill_color(ctx, color_yellow());
+    graphics_fill_rect(ctx, GRect(2, 2, sz.w + 5, 13), 2, GCornersAll);
+    draw_text_box(ctx, "LINK LOST", box, s_font_chip_small, GColorBlack, GTextAlignmentLeft);
   } else if (!s_link.connected) {
     draw_text_box(ctx, typed("LINK LOST", buf, sizeof(buf), B_TAG_MAGI_MS, B_TAG_STEP),
                   GRect(4, 1, 80, 12), s_font_chip_small, color_yellow(), GTextAlignmentLeft);
@@ -710,6 +700,8 @@ static void draw_quiet_tag(GContext *ctx) {
   draw_tiny_text(ctx, typed("QUIET", buf, sizeof(buf), B_TAG_PWR_MS, B_TAG_STEP), x + 8, y + 1, 1, ink);
 }
 
+static bool use_24h(void);
+
 /* ---------- Face ---------- */
 
 static void draw_face(GContext *ctx, GRect bounds) {
@@ -737,13 +729,18 @@ static void draw_face(GContext *ctx, GRect bounds) {
 
   /* Time digits are drawn on every frame, including the first frame of a sequence. */
   int label_y = s_is_obstructed ? 120 : 122;
-  char label[24];
-  snprintf(label, sizeof(label), "LOCAL TIME // %s", s_meridiem[0] ? s_meridiem : "ACTIVE");
-  char label_buf[24];
+  /* "LOCAL TIME // ACTIVE", "// PM", or with a second zone "// TYO 04:05" / "// PM TYO 4:05AM". */
+  static const char prefix[] = "LOCAL TIME // ";
+  char tz[16] = "";
+  if (s_tz2_have) td_format_tz2(tz, sizeof(tz), s_settings.v[TD_SET_TZ2], time(NULL), s_tz2_offset, use_24h());
+  char label[40];
+  if (tz[0]) snprintf(label, sizeof(label), "%s%s%s%s", prefix, s_meridiem, s_meridiem[0] ? " " : "", tz);
+  else snprintf(label, sizeof(label), "%s%s", prefix, s_meridiem[0] ? s_meridiem : "ACTIVE");
+  char label_buf[40];
   const char *shown_label = typed(label, label_buf, sizeof(label_buf), 0, B_LABEL_STEP);
   draw_tiny_text(ctx, shown_label, 9, label_y, 1, color_grey());
-  if (s_meridiem[0] && shown_label == label) {
-    draw_tiny_text(ctx, s_meridiem, 9 + tiny_text_width("LOCAL TIME // ", 1) + 1, label_y, 1, GColorWhite);
+  if ((s_meridiem[0] || tz[0]) && shown_label == label) {
+    draw_tiny_text(ctx, label + strlen(prefix), 9 + tiny_text_width(prefix, 1) + 1, label_y, 1, GColorWhite);
   }
   draw_text_box(ctx, s_time_text, GRect(0, s_is_obstructed ? 124 : 127, 150, 52),
                 s_font_time, GColorWhite, GTextAlignmentCenter);
@@ -877,6 +874,17 @@ static void draw_weather_screen(GContext *ctx, int parts) {
   graphics_context_set_stroke_color(ctx, GColorDarkGray);
   graphics_draw_line(ctx, GPoint(0, 166), GPoint(199, 166));
   draw_tiny_text(ctx, "PRECIP", 6, 170, 1, GColorVividCerulean);
+  /* The next sunrise or sunset, from the phone's last weather fetch. */
+  bool is_set = false;
+  int64_t sun = td_sun_next(s_sunrise, s_sunset, time(NULL), &is_set);
+  if (sun > 0) {
+    char clock[8], mer[3];
+    time_t st = (time_t)sun;
+    struct tm *lt = localtime(&st);
+    td_format_time(clock, sizeof(clock), mer, lt->tm_hour, lt->tm_min, use_24h());
+    snprintf(buf, sizeof(buf), "%s %s%s", is_set ? "SUNSET" : "SUNRISE", clock, mer);
+    draw_tiny_text(ctx, buf, 194 - tiny_text_width(buf, 1), 170, 1, GColorChromeYellow);
+  }
 }
 
 static int hr_bucket_x(int i) {
@@ -956,15 +964,107 @@ static void draw_heart_screen(GContext *ctx, int parts) {
   draw_text_box(ctx, buf, GRect(100, 205, 92, 16), s_font_chip_small, color_grey(), GTextAlignmentRight);
 }
 
+/* Steps screen: one bar per hour since midnight, same frame as the heart-rate graph. */
+static int step_bar_w(void) {
+  GRect g = PK_GRAPH;
+  int n = s_step_hours < 6 ? 6 : s_step_hours;
+  return (g.size.w - 6) / n;
+}
+
+static int step_bar_x(int i) {
+  return PK_GRAPH.origin.x + 4 + i * step_bar_w();
+}
+
+static int step_max(void) {
+  int mx = 0;
+  for (int i = 0; i < s_step_hours; i++) if (s_step_hist[i] > mx) mx = s_step_hist[i];
+  return mx;
+}
+
+static int step_bar_top(int i, int mx) {
+  GRect g = PK_GRAPH;
+  int h = mx > 0 ? (s_step_hist[i] * (g.size.h - 12)) / mx : 0;
+  return g.origin.y + g.size.h - 2 - h;
+}
+
+static void draw_steps_screen(GContext *ctx, int parts) {
+  GRect g = PK_GRAPH;
+  char buf[24];
+  draw_peek_header(ctx, "PILOT ACTIVITY", "TODAY", GColorWhite);
+  if (parts >= 2) {
+    draw_text_box(ctx, s_steps_text, GRect(6, 14, 110, 34), s_font_big, s_steps.valid ? GColorWhite : color_grey(),
+                  GTextAlignmentLeft);
+    if (s_pace.valid) {
+      char num[12];
+      td_format_steps(num, sizeof(num), (TdReading){true, s_pace.typical_now});
+      snprintf(buf, sizeof(buf), "TYPICAL %s", num);
+    } else {
+      snprintf(buf, sizeof(buf), "TYPICAL --");
+    }
+    draw_text_box(ctx, buf, GRect(100, 20, 94, 16), s_font_chip_small, GColorLightGray, GTextAlignmentRight);
+    td_format_pace(buf, sizeof(buf), &s_pace);
+    bool behind = s_pace.valid && s_pace.today < s_pace.typical_now && strcmp(buf, "ON PACE") != 0;
+    draw_text_box(ctx, buf, GRect(100, 36, 94, 16), s_font_chip_small, behind ? color_yellow() : color_green(),
+                  GTextAlignmentRight);
+  }
+
+  graphics_context_set_stroke_width(ctx, 1);
+  graphics_context_set_stroke_color(ctx, GColorWhite);
+  graphics_draw_rect(ctx, g);
+  int mx = step_max();
+  if (!s_steps.valid || s_step_hours <= 0) {
+    draw_text_box(ctx, "NO STEP DATA", GRect(g.origin.x, g.origin.y + 40, g.size.w, 18), s_font_chip_small,
+                  color_grey(), GTextAlignmentCenter);
+  } else {
+    int bw = step_bar_w();
+    for (int i = 0; i < s_step_hours; i++) {
+      if (s_step_hist[i] <= 0) continue;
+      int top = step_bar_top(i, mx);
+      graphics_context_set_fill_color(ctx, i == s_step_hours - 1 ? accent_color() : GColorDarkCandyAppleRed);
+      graphics_fill_rect(ctx, GRect(step_bar_x(i), top, bw > 3 ? bw - 2 : 1, g.origin.y + g.size.h - 2 - top), 0,
+                         GCornerNone);
+    }
+  }
+  if (parts < 3) return;
+
+  /* Hour labels every six hours, and NOW under the current hour. */
+  int bw = step_bar_w();
+  for (int h = 0; h < s_step_hours - 2; h += 6) {
+    snprintf(buf, sizeof(buf), "%02d", h);
+    draw_text_box(ctx, buf, GRect(step_bar_x(h) - 8, g.origin.y + g.size.h, bw + 16, 16), s_font_chip_small,
+                  color_grey(), GTextAlignmentCenter);
+  }
+  draw_text_box(ctx, "NOW", GRect(g.origin.x + g.size.w - 40, g.origin.y + g.size.h, 40, 16), s_font_chip_small,
+                color_grey(), GTextAlignmentRight);
+
+  graphics_context_set_stroke_color(ctx, accent_color());
+  graphics_draw_line(ctx, GPoint(0, 186), GPoint(199, 186));
+  draw_text_box(ctx, "DISTANCE", GRect(8, 188, 100, 16), s_font_chip_small, GColorWhite, GTextAlignmentLeft);
+  if (s_step_dist.valid) {
+    /* Miles alongside Fahrenheit, kilometres otherwise. */
+    bool miles = s_settings.v[TD_SET_TEMP_UNIT] == TD_TEMP_F;
+    int tenths = miles ? (int)((s_step_dist.value * 10 + 804) / 1609) : (int)((s_step_dist.value + 50) / 100);
+    snprintf(buf, sizeof(buf), "%d.%d %s", tenths / 10, tenths % 10, miles ? "MI" : "KM");
+  } else {
+    snprintf(buf, sizeof(buf), "--");
+  }
+  draw_text_box(ctx, buf, GRect(100, 188, 92, 16), s_font_chip, GColorOrange, GTextAlignmentRight);
+  draw_text_box(ctx, "ACTIVE", GRect(8, 205, 100, 16), s_font_chip_small, color_grey(), GTextAlignmentLeft);
+  if (s_step_active.valid) snprintf(buf, sizeof(buf), "%d MIN", (int)(s_step_active.value / 60));
+  else snprintf(buf, sizeof(buf), "--");
+  draw_text_box(ctx, buf, GRect(100, 205, 92, 16), s_font_chip_small, color_grey(), GTextAlignmentRight);
+}
+
 static void draw_peek_screen(GContext *ctx, int parts) {
   fill_black(ctx, GRect(0, 0, 200, 228));
   if (s_peek.screen == TD_SHAKE_HEART) draw_heart_screen(ctx, parts);
+  else if (s_peek.screen == TD_SHAKE_STEPS) draw_steps_screen(ctx, parts);
   else draw_weather_screen(ctx, parts);
 }
 
 /* The Sync Graph's waves collapse onto the target screen's own line: the heart-rate
  * trace, or the tops of the forecast bars. Missing data collapses to the centre line. */
-#define TRACE_MAX TD_HR_BUCKETS
+#define TRACE_MAX TD_STEP_HOURS
 static int peek_trace(GPoint *pts) {
   int n = 0;
   if (s_peek.screen == TD_SHAKE_HEART) {
@@ -972,6 +1072,12 @@ static int peek_trace(GPoint *pts) {
     for (int i = 0; i < TD_HR_BUCKETS; i++) {
       if (s_hr_hist[i] > 0) pts[n++] = GPoint(hr_bucket_x(i), hr_bucket_y(i));
     }
+    return n;
+  }
+  if (s_peek.screen == TD_SHAKE_STEPS) {
+    if (!s_steps.valid) return 0;
+    int mx = step_max(), half = step_bar_w() / 2;
+    for (int i = 0; i < s_step_hours; i++) pts[n++] = GPoint(step_bar_x(i) + half, step_bar_top(i, mx));
     return n;
   }
   int shown = td_forecast_shown(&s_fc, s_fc_first);
@@ -1097,7 +1203,9 @@ static void draw_fx_sync(GContext *ctx, GRect bounds, int t) {
     graphics_context_set_stroke_width(ctx, 1);
     draw_text_box(ctx, "EVA 01", GRect(115, 11, 76, 22), s_font_badge, col, GTextAlignmentLeft);
     draw_tiny_text(ctx, "SUBJECT", 115, 41, 1, col);
-    draw_text_box(ctx, s_peek.screen == TD_SHAKE_HEART ? "HEART" : "WEATHER", GRect(144, 35, 48, 16), s_font_chip,
+    draw_text_box(ctx, s_peek.screen == TD_SHAKE_HEART   ? "HEART"
+                  : s_peek.screen == TD_SHAKE_STEPS ? "STEPS"
+                                                    : "WEATHER", GRect(144, 35, 48, 16), s_font_chip,
                   col, GTextAlignmentLeft);
   }
 }
@@ -1231,6 +1339,59 @@ static void update_health(void) {
 #endif
   td_format_steps(s_steps_text, sizeof(s_steps_text), s_steps);
   td_format_hr(s_hr_text, sizeof(s_hr_text), s_hr);
+}
+
+/* Today's steps against the firmware's average for this kind of day (weekday or weekend).
+ * Only read when something shows it: the Steps vs typical rail or the steps screen. */
+static void update_pace(void) {
+  s_pace = (TdPace){false, 0, 0, 0};
+#if defined(PBL_HEALTH)
+  if (!s_steps.valid) return;
+  time_t start = time_start_of_today();
+  time_t now = time(NULL);
+  const HealthServiceTimeScope scope = HealthServiceTimeScopeDailyWeekdayOrWeekend;
+  if (!(health_service_metric_averaged_accessible(HealthMetricStepCount, start, start + SECONDS_PER_DAY, scope) &
+        HealthServiceAccessibilityMaskAvailable)) {
+    return;
+  }
+  int32_t day = health_service_sum_averaged(HealthMetricStepCount, start, start + SECONDS_PER_DAY, scope);
+  int32_t by_now = health_service_sum_averaged(HealthMetricStepCount, start, now, scope);
+  s_pace = (TdPace){day > 0, s_steps.value, by_now, day};
+#endif
+}
+
+/* Steps screen snapshot, read once when it opens: hourly steps since midnight,
+ * walked distance and active time. */
+static void read_steps_day(void) {
+  memset(s_step_hist, 0, sizeof(s_step_hist));
+  s_step_hours = 0;
+  s_step_dist = (TdReading){false, 0};
+  s_step_active = (TdReading){false, 0};
+#if defined(PBL_HEALTH)
+  time_t start = time_start_of_today();
+  time_t now = time(NULL);
+  if (health_service_metric_accessible(HealthMetricStepCount, start, now) & HealthServiceAccessibilityMaskAvailable) {
+    int hours = (int)((now - start) / SECONDS_PER_HOUR) + 1;
+    s_step_hours = hours > TD_STEP_HOURS ? TD_STEP_HOURS : hours;
+    for (int i = 0; i < s_step_hours; i++) {
+      time_t a = start + i * SECONDS_PER_HOUR, b = a + SECONDS_PER_HOUR;
+      HealthValue v = health_service_sum(HealthMetricStepCount, a, b < now ? b : now);
+      s_step_hist[i] = v > 0 ? (int16_t)(v > INT16_MAX ? INT16_MAX : v) : 0;
+    }
+  }
+  if (health_service_metric_accessible(HealthMetricWalkedDistanceMeters, start, now) &
+      HealthServiceAccessibilityMaskAvailable) {
+    s_step_dist = (TdReading){true, health_service_sum(HealthMetricWalkedDistanceMeters, start, now)};
+  }
+  if (health_service_metric_accessible(HealthMetricActiveSeconds, start, now) & HealthServiceAccessibilityMaskAvailable) {
+    s_step_active = (TdReading){true, health_service_sum(HealthMetricActiveSeconds, start, now)};
+  }
+#endif
+}
+
+static void update_activity(void) {
+  update_health();
+  if (s_settings.v[TD_SET_SYNC] == TD_SYNC_PACE) update_pace();
 }
 
 static void update_time(void) {
@@ -1434,6 +1595,10 @@ static void peek_read_heart(void) {
 static void peek_prepare(void) {
   update_health();
   if (s_peek.screen == TD_SHAKE_HEART) peek_read_heart();
+  if (s_peek.screen == TD_SHAKE_STEPS) {
+    update_pace();
+    read_steps_day();
+  }
   s_fc_first = td_forecast_first(&s_fc, time(NULL));
 }
 
@@ -1628,7 +1793,27 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
     outbox_pump();
   }
 
-  if (changed) update_time();
+  Tuple *tz2 = dict_find(iterator, MESSAGE_KEY_TZ2_OFFSET);
+  if (tz2 && (tz2->type == TUPLE_INT || tz2->type == TUPLE_UINT) && td_tz2_offset_valid((int)tuple_int(tz2))) {
+    s_tz2_offset = (int)tuple_int(tz2);
+    if (!s_tz2_have || persist_read_int(PERSIST_TZ2_OFFSET) != s_tz2_offset) {
+      persist_write_int(PERSIST_TZ2_OFFSET, s_tz2_offset);
+    }
+    s_tz2_have = true;
+  }
+  Tuple *rise = dict_find(iterator, MESSAGE_KEY_SUNRISE);
+  Tuple *set = dict_find(iterator, MESSAGE_KEY_SUNSET);
+  if (rise && set) {
+    s_sunrise = tuple_int(rise);
+    s_sunset = tuple_int(set);
+    persist_write_int(PERSIST_SUNRISE, (int32_t)s_sunrise);
+    persist_write_int(PERSIST_SUNSET, (int32_t)s_sunset);
+  }
+
+  if (changed) {
+    update_time();
+    update_activity();
+  }
   mark_dirty();
 }
 
@@ -1643,8 +1828,42 @@ static void battery_handler(BatteryChargeState state) {
   mark_dirty();
 }
 
+static void link_buzz_fire(void *context) {
+  s_link_buzz_timer = NULL;
+  if (td_link_should_buzz(&s_link, s_settings.v[TD_SET_LINK_VIBE], quiet_time_is_active())) {
+    static const uint32_t pattern[] = {150, 120, 150};
+    VibePattern vp = {.durations = pattern, .num_segments = ARRAY_LENGTH(pattern)};
+    vibes_enqueue_custom_pattern(vp);
+  }
+}
+
+static void link_plate_expired(void *context) {
+  s_link_plate_timer = NULL;
+  mark_dirty();
+}
+
+static void link_alert_cancel(void) {
+  if (s_link_buzz_timer) {
+    app_timer_cancel(s_link_buzz_timer);
+    s_link_buzz_timer = NULL;
+  }
+  if (s_link_plate_timer) {
+    app_timer_cancel(s_link_plate_timer);
+    s_link_plate_timer = NULL;
+  }
+}
+
 static void app_connection_handler(bool connected) {
+  bool was_connected = s_link.connected;
   bool restored = td_link_update(&s_link, connected, time(NULL));
+  if (connected) {
+    link_alert_cancel();
+  } else if (was_connected && s_settings.v[TD_SET_LINK_VIBE] == TD_VIBE_ON) {
+    /* Buzz only if the link stays down, so a brief flap stays silent. */
+    link_alert_cancel();
+    s_link_buzz_timer = app_timer_register(TD_LINK_ALERT_DELAY_S * 1000, link_buzz_fire, NULL);
+    s_link_plate_timer = app_timer_register(TD_LINK_ALERT_SHOW_S * 1000, link_plate_expired, NULL);
+  }
   if (connected) {
     td_weather_note_reconnect(&s_wx_sched);
     maybe_request_weather();
@@ -1657,6 +1876,8 @@ static void app_connection_handler(bool connected) {
 static void set_obstructed(bool obstructed) {
   s_is_obstructed = obstructed;
   anim_check_abort("obstructed");
+  /* The shake screens use the full height; Quick View would cover their lower rows. */
+  if (obstructed) peek_close("obstructed");
 }
 
 static void prv_unobstructed_will_change(GRect final_unobstructed_screen_area, void *context) {
@@ -1677,7 +1898,7 @@ static void prv_unobstructed_did_change(void *context) {
 
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time();
-  update_health();
+  update_activity();
   update_quiet_time();
   maybe_request_weather();
   mark_dirty();
@@ -1702,7 +1923,7 @@ static void main_window_load(Window *window) {
 
   update_battery(battery_state_service_peek());
   update_time();
-  update_health();
+  update_activity();
   update_quiet_time();
 
   GRect unobstructed = layer_get_unobstructed_bounds(s_window_layer);
@@ -1735,6 +1956,12 @@ static void init(void) {
   load_settings();
   load_weather_cache();
   load_forecast_cache();
+  if (persist_exists(PERSIST_TZ2_OFFSET)) {
+    s_tz2_offset = persist_read_int(PERSIST_TZ2_OFFSET);
+    s_tz2_have = td_tz2_offset_valid(s_tz2_offset);
+  }
+  if (persist_exists(PERSIST_SUNRISE)) s_sunrise = persist_read_int(PERSIST_SUNRISE);
+  if (persist_exists(PERSIST_SUNSET)) s_sunset = persist_read_int(PERSIST_SUNSET);
   td_anim_init(&s_anim, persist_exists(PERSIST_LAST_FULL) ? persist_read_int(PERSIST_LAST_FULL) : 0);
   bool connected = connection_service_peek_pebble_app_connection();
   s_link = (TdLink){connected, connected ? 0 : time(NULL)};
@@ -1749,7 +1976,7 @@ static void init(void) {
   app_message_register_inbox_received(inbox_received_callback);
   app_message_register_outbox_sent(outbox_sent_callback);
   app_message_register_outbox_failed(outbox_failed_callback);
-  app_message_open(256, 128);
+  app_message_open(512, 128); /* largest inbox today: weather + 12 h forecast + sun times, ~200 B */
 
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   battery_state_service_subscribe(battery_handler);
@@ -1761,6 +1988,7 @@ static void init(void) {
 }
 
 static void deinit(void) {
+  link_alert_cancel();
   if (s_tap_subscribed) accel_tap_service_unsubscribe();
   connection_service_unsubscribe();
   battery_state_service_unsubscribe();

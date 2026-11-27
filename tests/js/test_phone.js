@@ -424,12 +424,16 @@ test('forecast stops at missing or out-of-order hours and never invents data', f
   var p = phoneLib.createPhone(env);
   p.requestWeather('watch');
   respond(env.xhrs[0], 200, JSON.stringify({current: {temperature_2m: 17.6}}));
-  eq(env.sent[0].msg, {TEMPERATURE: 18, WEATHER_TIME: env.sent[0].msg.WEATHER_TIME}, 'temperature only');
+  var m = env.sent[0].msg;
+  check(m.SUNRISE > 0 && m.SUNSET > 0, 'sun times from the fetch location');
+  eq({TEMPERATURE: m.TEMPERATURE, WEATHER_TIME: m.WEATHER_TIME, FORECAST_START: m.FORECAST_START},
+     {TEMPERATURE: 18, WEATHER_TIME: m.WEATHER_TIME, FORECAST_START: undefined}, 'temperature only');
 });
 
 test('shake settings are stored, clamped and on the config page', function() {
   eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 2, SHAKE_FX: 1}), {SHAKE_SCREEN: 2, SHAKE_FX: 1}, 'kept');
-  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 3, SHAKE_FX: 7}), {SHAKE_SCREEN: 2, SHAKE_FX: 0}, 'out of range');
+  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 4, SHAKE_FX: 7}), {SHAKE_SCREEN: 2, SHAKE_FX: 0}, 'out of range');
+  eq(phoneLib.sanitizeSettings({SHAKE_SCREEN: 3}), {SHAKE_SCREEN: 3}, 'steps screen');
   var html = phoneLib.buildConfigHtml({SHAKE_SCREEN: 1, SHAKE_FX: 1});
   check(html.indexOf('id="SHAKE_SCREEN"') > 0 && html.indexOf('id="SHAKE_FX"') > 0, 'selects present');
   check(html.indexOf('<option value="1" selected>Emergency Hex') > 0, 'current transition selected');
@@ -482,6 +486,27 @@ test('plugin weather is parsed from the current hour, in Celsius, with mapped co
   eq(f.fc.temps[0], 14, '58°F -> 14°C');
 });
 
+test('second time zone offset follows DST and falls back to standard time', function() {
+  var nyc = phoneLib.TZ2_CITIES.map(function(c) { return c && c.code; }).indexOf('NYC');
+  eq(phoneLib.tz2Offset(nyc, Date.UTC(2026, 0, 15, 12)), -300, 'EST in January');
+  eq(phoneLib.tz2Offset(nyc, Date.UTC(2026, 6, 15, 12)), -240, 'EDT in July');
+  eq(phoneLib.tz2Offset(8, Date.UTC(2026, 6, 15, 12)), 540, 'Tokyo');
+  eq(phoneLib.tz2Offset(0, Date.UTC(2026, 6, 15, 12)), null, 'off');
+  eq(phoneLib.TZ2_CITIES.length, 18, 'matches TD_TZ2_CITY_COUNT on the watch');
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.onWebviewClosed(encodeURIComponent(JSON.stringify({TZ2: 8, LINK_VIBE: 1})));
+  eq(env.sent[0].msg, {LINK_VIBE: 1, TZ2: 8, TZ2_OFFSET: 540}, 'offset travels with the setting');
+});
+
+test('next sunrise and sunset are a few minutes from published times', function() {
+  /* London, 27 Nov 2025 at 12:00 UTC: sunset 15:56 UTC, next sunrise 07:40 UTC on the 28th */
+  var e = phoneLib.nextSunEvents(51.5, -0.1, Date.UTC(2025, 10, 27, 12));
+  check(Math.abs(e.set - Date.UTC(2025, 10, 27, 15, 56) / 1000) < 5 * 60, 'sunset ' + new Date(e.set * 1000).toISOString());
+  check(Math.abs(e.rise - Date.UTC(2025, 10, 28, 7, 40) / 1000) < 5 * 60, 'sunrise ' + new Date(e.rise * 1000).toISOString());
+  eq(phoneLib.nextSunEvents(78, 15, Date.UTC(2025, 11, 21, 12)), {rise: 0, set: 0}, 'polar night: neither');
+});
+
 test('plugin weather without hourly rain chance is rejected rather than shown as dry', function() {
   eq(phoneLib.parsePluginWeather(pluginEnvelope({noRain: true}), 1760000000), null, 'null');
   eq(phoneLib.parsePluginWeather({instances: []}, 1760000000), null, 'no instance');
@@ -494,8 +519,10 @@ test('fetch uses the plugin source and skips GPS and Open-Meteo', function() {
   eq(env.subs.length, 1, 'subscribed once');
   eq(env.subs[0].category + '/' + env.subs[0].item, 'weather/location', 'weather source');
   env.subs[0].onData(pluginEnvelope());
-  eq(env.geoCalls, 0, 'no GPS');
+  eq(env.geoCalls, 1, 'one location lookup, for sunrise and sunset only');
   eq(env.xhrs.length, 0, 'no HTTP');
+  env.sent[0].ok();
+  check(env.sent[1] && env.sent[1].msg.SUNRISE > 0, 'sun times sent on their own, after the weather');
   eq(env.sent[0].msg.TEMPERATURE, 18, 'temperature sent');
   eq(env.sent[0].msg.FORECAST_START, MIDNIGHT + 8 * 3600, 'forecast sent');
   check(!p.isFetching(), 'fetch finished');
@@ -508,10 +535,13 @@ test('a later fetch reuses the newest plugin reading without resubscribing', fun
   p.requestWeather('watch');
   env.subs[0].onData(pluginEnvelope());
   env.sent[0].ok();
+  env.sent[1].ok(); /* sun times */
   env.advance(11 * 60 * 1000); /* past the phone cache, still inside validUntilMs */
   eq(p.requestWeather('watch'), 'fetch', 'fetching again');
   eq(env.subs.length, 1, 'same subscription');
-  eq(env.sent.length, 2, 'sent straight away from the latest envelope');
+  eq(env.sent.length, 3, 'sent straight away from the latest envelope');
+  eq(env.geoCalls, 1, 'location reused for the day');
+  check(env.sent[2].msg.SUNSET > 0, 'sun times ride along with the weather');
   eq(env.xhrs.length, 0, 'no HTTP');
 });
 

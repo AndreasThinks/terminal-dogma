@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.23
+
+- **Steps vs typical day** SYNC rail source: today's steps against the watch's own average for a weekday or weekend day, with a yellow marker where you usually are by now.
+- **Steps, today** shake screen: hourly steps since midnight, typical-by-now and the gap, walked distance and active minutes.
+- **Phone disconnect alert** (off by default): two short buzzes if the link stays down for 10 seconds, and an inverted LINK LOST plate for the first minute. Silent during Quiet Time.
+- **Second time zone** (off by default): 17 cities, shown in the label above the time. The phone supplies the offset, daylight saving included.
+- The weather column shows the current condition (CLOUD, RAIN, ...) instead of WEATHER while the reading is fresh.
+- The forecast screen shows the next sunrise or sunset, worked out on the phone from a location fix at most a day old.
+- Quick View now closes the shake screen, which drew under the card before.
+- The 3x5 HUD font gains J, X, Z, `:`, `+` and `.`, and a host test checks every string the face draws in it.
+- AppMessage inbox raised to 512 bytes for the extra keys.
+
 ## 1.0.22
 
 - Weather now comes from the Pebble app's weather source (the new Pebble plugins, mobile app 2.0 and later) when it can supply the current temperature and the hourly temperature and rain chance. It follows the weather provider and location chosen in the Pebble app.
