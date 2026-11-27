@@ -1,8 +1,8 @@
 {
   "name": "terminal-dogma",
   "author": "Andreas Varotsis",
-  "version": "1.0.21",
-  "description": "Evangelion/NERV-inspired Pebble Time 2 watchface: MAGI-style HUD with honest health, battery, phone-link and weather states, configurable modules, accent colour, Celsius/Fahrenheit weather, a configurable SYNC rail, optional MAGI/system-boot transitions (Off/Subtle/Full), and a shake-to-show heart-rate graph with reversible timed transitions by default, with an optional forecast.",
+  "version": "1.0.22",
+  "description": "Evangelion/NERV-inspired Pebble Time 2 watchface: MAGI-style HUD with honest health, battery, phone-link and weather states (Pebble weather plugin source with Open-Meteo fallback), configurable modules, accent colour, Celsius/Fahrenheit weather, a configurable SYNC rail, optional MAGI/system-boot transitions (Off/Subtle/Full), and a shake-to-show heart-rate graph with reversible timed transitions by default, with an optional forecast.",
   "keywords": ["pebble-app", "watchface", "nerv"],
   "repository": {
     "type": "git",
@@ -16,6 +16,21 @@
     "sdkVersion": "3",
     "enableMultiJS": true,
     "capabilities": ["configurable", "location"],
+    "usesPermissions": [
+      {
+        "name": "Location",
+        "reason": "To show the weather where you are",
+        "required": true
+      },
+      {
+        "name": "Internet",
+        "parameters": {
+          "domains": ["api.open-meteo.com"]
+        },
+        "reason": "To fetch weather from Open-Meteo when no Pebble weather source is available",
+        "required": false
+      }
+    ],
     "targetPlatforms": ["emery"],
     "watchapp": {
       "watchface": true

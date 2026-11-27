@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.22
 
+- Weather now comes from the Pebble app's weather source (the new Pebble plugins, mobile app 2.0 and later) when it can supply the current temperature and the hourly temperature and rain chance. It follows the weather provider and location chosen in the Pebble app.
+  - If the source is missing, not permitted, silent for 8 seconds, or has no hourly rain chance yet, the face falls back to its own GPS and Open-Meteo fetch, as before.
+  - Plugin conditions map onto the existing forecast labels (CLEAR, CLOUD, RAIN, SNOW).
+- `package.json` declares `usesPermissions` for the new permission prompts: Location (required) and Internet for `api.open-meteo.com` (optional, used by the fallback).
+- Building needs SDK 4.44+ and pebble-tool 5.1.0+.
 - Fix the shake screen reopening straight away when it is closed by a shake with animations Off or a low battery. The hard cut closed it on the first tap, and the rest of that shake's taps opened it again.
 
 ## 1.0.21

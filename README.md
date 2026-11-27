@@ -30,7 +30,7 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - Date | Steps | Weather
   - Date | Battery | Weather
   - Date | Steps | Battery
-- Weather from Open-Meteo via the phone's location:
+- Weather from the Pebble app's weather source (Pebble plugins, mobile app 2.0+) when it can supply the current temperature plus hourly temperature and rain chance. Otherwise, and on older phone apps, the face fetches Open-Meteo itself using the phone's location:
   - The watch keeps the last reading and its observation time, so a relaunch does not blank it.
   - After 60 minutes without an update it turns grey and is labelled `STALE`.
   - After 6 hours it shows `--°`.
@@ -111,6 +111,8 @@ wscript                       Pebble SDK build config
 tests/run.sh      # host tests, needs cc and node
 pebble build      # writes build/<checkout-directory-name>.pbw
 ```
+
+Building needs Pebble SDK 4.44+ and pebble-tool 5.1.0+ (for `usesPermissions` and the plugin weather source).
 
 See [docs/TESTING.md](docs/TESTING.md) for emulator capture and what is not covered.
 

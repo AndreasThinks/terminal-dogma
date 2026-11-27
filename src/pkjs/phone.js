@@ -5,6 +5,15 @@ var SETTINGS_KEY = 'terminal-dogma-settings-v2';
 var LEGACY_SETTINGS_KEY = 'nerv-watchface-settings-v1';
 var WEATHER_KEY = 'terminal-dogma-weather-v1';
 var OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
+/* Pebble plugin weather source (mobile app 2.0+). Used when it can serve the whole
+ * reading; otherwise the face falls back to its own GPS + Open-Meteo fetch. */
+var PLUGIN_SOURCE = {category: 'weather', item: 'location'};
+var PLUGIN_PROPS = ['temperature', 'hourly_temperature', 'hourly_precipitation', 'hourly_condition_code'];
+/* plugin condition_code -> the WMO code the watch already labels (td_wmo_label) */
+var PLUGIN_CODES = {
+  sun: 0, partly_cloudy: 2, cloudy: 3, light_rain: 61, heavy_rain: 65,
+  light_snow: 71, heavy_snow: 75, rain_and_snow: 66
+};
 
 var SETTINGS = {
   CLOCK_FORMAT: {max: 2, def: 0},
@@ -24,6 +33,7 @@ var T = {
   CACHE_REUSE_S: 10 * 60, /* resend a fetch this recent instead of GPS + HTTP */
   GEO_TIMEOUT_MS: 15000,
   HTTP_TIMEOUT_MS: 15000,
+  PLUGIN_WAIT_MS: 8000,   /* wait this long for the plugin source before falling back */
   FETCH_GUARD_MS: 40000,  /* whole fetch abandoned after this, whatever the callbacks do */
   SEND_TIMEOUT_MS: 10000, /* an AppMessage with no ack/nack after this counts as failed */
   RETRY_DELAYS_MS: [1000, 3000, 9000]
@@ -121,6 +131,7 @@ function createPhone(env) {
   var fetchId = 0;
   var fetching = false;
   var guardTimer = null;
+  var plugin = {sub: null, off: !env.subscribeToSource, latest: null, waiter: null};
 
   function nowS() { return Math.floor(env.now() / 1000); }
 
@@ -201,15 +212,79 @@ function createPhone(env) {
         return finishFetch(id, 'parse error');
       }
       if (typeof temp !== 'number' || isNaN(temp)) return finishFetch(id, 'no temperature');
-      var ts = nowS();
-      var fc = parseForecast(data);
-      var cache = {temp: temp, ts: ts};
-      if (fc) cache.fc = fc;
-      env.storage.setItem(WEATHER_KEY, JSON.stringify(cache));
-      sendWeather(temp, ts, fc);
-      finishFetch(id, 'ok');
+      deliver(id, temp, parseForecast(data), 'open-meteo');
     };
     req.send();
+  }
+
+  function deliver(id, temp, fc, source) {
+    var ts = nowS();
+    var cache = {temp: temp, ts: ts, src: source};
+    if (fc) cache.fc = fc;
+    env.storage.setItem(WEATHER_KEY, JSON.stringify(cache));
+    sendWeather(temp, ts, fc);
+    finishFetch(id, 'ok ' + source);
+  }
+
+  function fetchOpenMeteo(id) {
+    env.getPosition(function(pos) {
+      if (id !== fetchId || !fetching) return;
+      fetchWeather(id, pos.coords.latitude, pos.coords.longitude);
+    }, function() {
+      finishFetch(id, 'location error');
+    }, {timeout: T.GEO_TIMEOUT_MS, maximumAge: 600000});
+  }
+
+  /* One long-lived subscription; the newest envelope is kept for the next fetch. */
+  function ensureSubscription() {
+    if (plugin.off || plugin.sub) return;
+    try {
+      plugin.sub = env.subscribeToSource({
+        category: PLUGIN_SOURCE.category,
+        item: PLUGIN_SOURCE.item,
+        properties: PLUGIN_PROPS,
+        onData: function(data) {
+          plugin.latest = {data: data, at: env.now()};
+          if (plugin.waiter) plugin.waiter('data');
+        },
+        onError: function(err) {
+          var code = err && err.code;
+          env.log('weather plugin ' + code);
+          /* not installed or not allowed: stop waiting on it for this session */
+          if (code === 'PERMISSION_DENIED' || code === 'PLUGIN_UNAVAILABLE') plugin.off = true;
+          if (plugin.waiter) plugin.waiter('error');
+        }
+      }) || true;
+    } catch (e) {
+      env.log('weather plugin subscribe failed');
+      plugin.off = true;
+    }
+  }
+
+  function freshPluginReading() {
+    var l = plugin.latest;
+    if (!l || !l.data) return null;
+    var nowMs = env.now();
+    var valid = num(l.data.validUntilMs) ? nowMs < l.data.validUntilMs : nowMs - l.at < T.CACHE_REUSE_S * 1000;
+    return valid ? parsePluginWeather(l.data, nowS()) : null;
+  }
+
+  function fetchPlugin(id) {
+    var r = freshPluginReading();
+    if (r) return deliver(id, r.temp, r.fc, 'plugin');
+    var waitTimer = null;
+    function done(why) {
+      if (!plugin.waiter) return;
+      plugin.waiter = null;
+      env.clearTimeout(waitTimer);
+      if (id !== fetchId || !fetching) return;
+      var got = why === 'data' ? freshPluginReading() : null;
+      if (got) return deliver(id, got.temp, got.fc, 'plugin');
+      env.log('weather plugin ' + (why === 'data' ? 'incomplete' : why) + ', using open-meteo');
+      fetchOpenMeteo(id);
+    }
+    plugin.waiter = done;
+    waitTimer = env.setTimeout(function() { done('timeout'); }, T.PLUGIN_WAIT_MS);
   }
 
   /* reason: 'ready' (JS started with the watchface) or 'watch' (REQUEST_WEATHER). */
@@ -230,12 +305,9 @@ function createPhone(env) {
     fetching = true;
     var id = ++fetchId;
     guardTimer = env.setTimeout(function() { finishFetch(id, 'guard timeout'); }, T.FETCH_GUARD_MS);
-    env.getPosition(function(pos) {
-      if (id !== fetchId || !fetching) return;
-      fetchWeather(id, pos.coords.latitude, pos.coords.longitude);
-    }, function() {
-      finishFetch(id, 'location error');
-    }, {timeout: T.GEO_TIMEOUT_MS, maximumAge: 600000});
+    ensureSubscription();
+    if (plugin.off) fetchOpenMeteo(id);
+    else fetchPlugin(id);
     return 'fetch';
   }
 
@@ -307,6 +379,68 @@ function parseForecast(data) {
   return fc.temps.length ? fc : null;
 }
 
+/* A series property: {series: {start?, stepSec, <shape>: values}}. `values` may be a bare
+ * array or {values: [...], unit}. Returns {start, step, values, unit} or null. */
+function seriesOf(prop, shape) {
+  var se = prop && prop.series;
+  if (!se || !num(se.stepSec) || se.stepSec <= 0 || !num(se.start)) return null;
+  var v = se[shape];
+  var unit = null;
+  if (v && !Array.isArray(v)) { unit = v.unit || null; v = v.values; }
+  if (!Array.isArray(v)) return null;
+  return {start: se.start, step: se.stepSec, values: v, unit: unit};
+}
+
+function isFahrenheit(unit) {
+  return typeof unit === 'string' && /F/i.test(unit);
+}
+
+function toC(value, unit) {
+  return isFahrenheit(unit) ? (value - 32) * 5 / 9 : value;
+}
+
+function codeText(v) {
+  if (v && typeof v === 'object') v = v.text;
+  return typeof v === 'string' ? v : null;
+}
+
+/* Plugin envelope -> {temp, fc} in the same form as the Open-Meteo path, or null when the
+ * plugin cannot serve the current temperature plus hourly temperature and rain chance.
+ * A forecast without rain chances would read as DRY, so that falls back instead. */
+function parsePluginWeather(data, nowSec) {
+  var inst = data && Array.isArray(data.instances) && data.instances[0];
+  var props = inst && inst.properties;
+  if (!props) return null;
+  var cur = props.temperature && props.temperature.numericValue;
+  if (!cur || !num(cur.value)) return null;
+  var tempSeries = seriesOf(props.hourly_temperature, 'numericValue');
+  var rainSeries = seriesOf(props.hourly_precipitation, 'numericValue');
+  if (!tempSeries || !rainSeries) return null;
+  var codeSeries = seriesOf(props.hourly_condition_code, 'shortText');
+  var unit = tempSeries.unit || cur.unit;
+  /* series start at local midnight: skip to the slot holding this hour */
+  var first = Math.max(0, Math.floor((nowSec - tempSeries.start) / tempSeries.step));
+  var fc = {start: tempSeries.start + first * tempSeries.step, temps: [], rain: [], codes: []};
+  if (tempSeries.step !== 3600) return null;
+  for (var i = first; i < tempSeries.values.length && fc.temps.length < FORECAST_HOURS; i++) {
+    var t = tempSeries.values[i];
+    var slot = tempSeries.start + i * 3600;
+    var ri = (slot - rainSeries.start) / rainSeries.step;
+    var p = rainSeries.step === 3600 && ri >= 0 ? rainSeries.values[ri] : null;
+    if (!num(t) || !num(p)) break;
+    var c = null;
+    if (codeSeries && codeSeries.step === 3600) {
+      var ci = (slot - codeSeries.start) / codeSeries.step;
+      if (ci >= 0) c = codeText(codeSeries.values[ci]);
+    }
+    fc.temps.push(Math.max(-128, Math.min(127, Math.round(toC(t, unit)))));
+    fc.rain.push(Math.max(0, Math.min(100, Math.round(p))));
+    fc.codes.push(c && PLUGIN_CODES.hasOwnProperty(c) ? PLUGIN_CODES[c] : 255);
+  }
+  if (!fc.temps.length) return null;
+  return {temp: Math.round(toC(cur.value, cur.unit)), fc: fc};
+}
+
 function option(value, label, selected) {
   return '<option value="' + value + '"' + (selected === value ? ' selected' : '') + '>' + label + '</option>';
 }
@@ -339,7 +473,8 @@ function buildConfigHtml(settings) {
     select('SHAKE_SCREEN', 'Shake to show', settings, ['Off', 'Weather, next 6 hours', 'Heart rate, last 3 hours']) +
     select('SHAKE_FX', 'Shake transition', settings, ['Sync Graph', 'Emergency Hex']) +
     '<button id="save">Save</button>' +
-    '<div class="note">Weather comes from Open-Meteo using your phone location, refreshed about every 30 minutes. ' +
+    '<div class="note">Weather comes from the Pebble app\'s weather source when it can supply the hourly forecast, ' +
+    'otherwise from Open-Meteo using your phone location, refreshed about every 30 minutes. ' +
     'It turns grey and reads STALE after an hour without an update, and -- after six hours. ' +
     'BIO shows the watch\'s most recent heart-rate reading (at most 15 minutes old), or -- when there is none. ' +
     'Animations play when the face is first shown (at most once every 30 minutes) and briefly when the phone link or weather recovers. ' +
@@ -359,6 +494,7 @@ module.exports = {
   sanitizeSettings: sanitizeSettings,
   clampSetting: clampSetting,
   parseForecast: parseForecast,
+  parsePluginWeather: parsePluginWeather,
   buildConfigHtml: buildConfigHtml,
   SETTINGS_KEY: SETTINGS_KEY,
   LEGACY_SETTINGS_KEY: LEGACY_SETTINGS_KEY,
