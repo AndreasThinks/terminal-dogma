@@ -211,6 +211,8 @@ typedef struct {
   int t_ms;            /* transition clock; TD_PEEK_OUT draws the IN frame at duration - t_ms */
   int steps;
   int64_t opened_ms;   /* wall clock at opening, for the debounce */
+  int64_t cut_ms;      /* wall clock of a shake that closed it with a hard cut */
+  bool cut_by_tap;     /* cut_ms is set: the rest of that shake must not reopen it */
 } TdPeek;
 
 typedef struct {
@@ -222,7 +224,8 @@ typedef struct {
 } TdPeekEnv;
 
 /* A tap arrived at wall-clock now_ms. Opens (with or without the transition) or starts the
- * return. Taps during the debounce or while already returning are ignored. */
+ * return. Taps during the debounce, while already returning, or within the debounce of a
+ * shake that closed the screen with a hard cut are ignored. */
 TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms);
 /* Starts the return to the face: TD_PEEK_CLOSE_FX plays the transition in reverse (from the
  * current frame when the opening is still playing); TD_PEEK_CLOSE is a hard cut, used with

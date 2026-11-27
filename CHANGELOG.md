@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix the shake screen reopening straight away when it is closed by a shake with animations Off or a low battery. The hard cut closed it on the first tap, and the rest of that shake's taps opened it again.
+
 ## 1.0.21
 
 - The shake screen now returns to the face with the same transition played in reverse, after the 10-second hold or on a second shake. A shake during the opening reverses it from the frame on screen.
