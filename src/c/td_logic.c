@@ -234,6 +234,11 @@ bool td_tz2_offset_valid(int offset_min) {
   return offset_min >= -12 * 60 && offset_min <= 14 * 60;
 }
 
+TdTz2Action td_tz2_apply(bool city_changed, bool has_offset, int offset_min) {
+  if (has_offset) return td_tz2_offset_valid(offset_min) ? TD_TZ2_SET : TD_TZ2_CLEAR;
+  return city_changed ? TD_TZ2_CLEAR : TD_TZ2_KEEP;
+}
+
 void td_format_tz2(char *buf, size_t n, int index, int64_t utc_now, int offset_min, bool use_24h) {
   const char *label = td_tz2_label(index);
   if (!label[0] || !td_tz2_offset_valid(offset_min)) {
@@ -380,7 +385,9 @@ bool td_link_update(TdLink *l, bool connected, int64_t now) {
     l->lost_at = 0;
   } else if (!connected && l->connected) {
     l->lost_at = now;
+    l->alert_done = false;
   }
+  if (connected) l->alert_done = false;
   l->connected = connected;
   return meaningful;
 }
@@ -392,7 +399,25 @@ bool td_link_alert_showing(const TdLink *l, int64_t now) {
 }
 
 bool td_link_should_buzz(const TdLink *l, int vibe_setting, bool quiet_time) {
-  return vibe_setting == TD_VIBE_ON && !l->connected && !quiet_time;
+  return vibe_setting == TD_VIBE_ON && !l->connected && !l->alert_done && !quiet_time;
+}
+
+int td_link_alert_delay_s(const TdLink *l, int vibe_setting, int64_t now) {
+  if (vibe_setting != TD_VIBE_ON || l->connected || l->alert_done) return -1;
+  int64_t left = l->lost_at + TD_LINK_ALERT_DELAY_S - now;
+  return left < 1 ? 1 : (left > TD_LINK_ALERT_DELAY_S ? TD_LINK_ALERT_DELAY_S : (int)left);
+}
+
+void td_link_alert_done(TdLink *l) {
+  l->alert_done = true;
+}
+
+bool td_link_resume(TdLink *l, int64_t lost_at_marker, int64_t now) {
+  if (l->connected || lost_at_marker <= 0 || lost_at_marker > now ||
+      now - lost_at_marker >= TD_LINK_ALERT_MEMORY_S) return false;
+  l->lost_at = lost_at_marker;
+  l->alert_done = true;
+  return true;
 }
 
 /* ---------- MAGI checks ---------- */

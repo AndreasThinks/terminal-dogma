@@ -5,7 +5,11 @@
 - **Steps vs typical day** SYNC rail source: today's steps against the watch's own average for a weekday or weekend day, with a yellow marker where you usually are by now.
 - **Steps, today** shake screen: hourly steps since midnight, typical-by-now and the gap, walked distance and active minutes.
 - **Phone disconnect alert** (off by default): two short buzzes if the link stays down for 10 seconds, and an inverted LINK LOST plate for the first minute. Silent during Quiet Time.
+  - Also armed when the face starts while already offline and when the setting is turned on during an outage.
+  - Decided once per outage (a Quiet Time skip counts), and a face relaunch during the same outage within 6 hours stays silent.
 - **Second time zone** (off by default): 17 cities, shown in the label above the time. The phone supplies the offset, daylight saving included.
+  - When the phone's Intl cannot compute the offset it sends an explicit "unavailable" (`TZ2_OFFSET` 9999) instead of standard time, and the watch clears its stored offset. Changing city clears the old offset too.
+  - Weather sends carry only the offset, never settings, and only for a city the watch is known to have; after phone storage is lost the watch reports its own city and the offset follows.
 - The weather column shows the current condition (CLOUD, RAIN, ...) instead of WEATHER while the reading is fresh.
 - The forecast screen shows the next sunrise or sunset, worked out on the phone from a location fix at most a day old.
 - Quick View now closes the shake screen, which drew under the card before.

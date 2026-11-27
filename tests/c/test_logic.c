@@ -272,7 +272,7 @@ TEST(clock_12h_has_meridiem_24h_does_not) {
 }
 
 TEST(link_flaps_ignored_real_outage_reported_once) {
-  TdLink l = {true, 0};
+  TdLink l = {true, 0, false};
   CHECK(!td_link_update(&l, false, T0));
   CHECK(!td_link_update(&l, true, T0 + 20)); /* 20 s flap */
   CHECK(!td_link_update(&l, false, T0 + 100));
@@ -488,7 +488,7 @@ TEST(anim_simulated_day_is_bounded) {
   TdAnim a;
   td_anim_init(&a, 0);
   TdAnimEnv e = env(TD_MOTION_FULL, 68, false, false);
-  TdLink link = {true, 0};
+  TdLink link = {true, 0, false};
   TdWeatherState wx = TD_WX_NONE;
   int boots = 0, magis = 0;
   int64_t persisted = 0;
@@ -820,7 +820,7 @@ TEST(sun_next_event) {
 }
 
 TEST(link_alert_plate_and_buzz) {
-  TdLink l = {true, 0};
+  TdLink l = {true, 0, false};
   td_link_update(&l, false, T0);
   CHECK(td_link_alert_showing(&l, T0));
   CHECK(td_link_alert_showing(&l, T0 + TD_LINK_ALERT_SHOW_S - 1));
@@ -831,6 +831,67 @@ TEST(link_alert_plate_and_buzz) {
   td_link_update(&l, true, T0 + 5);                   /* back before the delayed buzz */
   CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, false));
   CHECK(!td_link_alert_showing(&l, T0 + 6));
+}
+
+TEST(link_alert_arms_for_startup_outage_and_late_enable) {
+  /* launched while already offline: the outage starts now, buzz after 10 s */
+  TdLink l = {false, T0, false};
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_ON, T0) == TD_LINK_ALERT_DELAY_S);
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_ON, T0 + 4) == TD_LINK_ALERT_DELAY_S - 4);
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_OFF, T0) < 0);
+  /* enabled mid-outage, already past 10 s: fires at once (1 s floor) */
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_ON, T0 + 300) == 1);
+  /* connected, or already handled for this outage: nothing to arm */
+  TdLink up = {true, 0, false};
+  CHECK(td_link_alert_delay_s(&up, TD_VIBE_ON, T0) < 0);
+  CHECK(td_link_should_buzz(&l, TD_VIBE_ON, false));
+  td_link_alert_done(&l);
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, false));
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_ON, T0 + 20) < 0);
+}
+
+TEST(link_alert_once_per_outage) {
+  TdLink l = {true, 0, false};
+  td_link_update(&l, false, T0);
+  CHECK(td_link_should_buzz(&l, TD_VIBE_ON, false));
+  td_link_alert_done(&l);                 /* buzzed */
+  td_link_update(&l, false, T0 + 30);     /* duplicate disconnected callback */
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, false));
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_ON, T0 + 30) < 0);
+  td_link_update(&l, true, T0 + 40);
+  td_link_update(&l, false, T0 + 50);     /* a new outage may alert again */
+  CHECK(td_link_should_buzz(&l, TD_VIBE_ON, false));
+  CHECK(td_link_alert_delay_s(&l, TD_VIBE_ON, T0 + 50) == TD_LINK_ALERT_DELAY_S);
+  /* Quiet Time at the 10 s mark: no buzz (the caller then marks the outage handled) */
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, true));
+}
+
+TEST(link_alert_relaunch_in_same_outage_stays_silent) {
+  TdLink l = {false, T0 + 500, false};    /* relaunched offline: outage "starts" now */
+  CHECK(td_link_resume(&l, T0, T0 + 500)); /* marker from the buzz at an earlier launch */
+  CHECK(l.lost_at == T0 && l.alert_done);
+  CHECK(!td_link_should_buzz(&l, TD_VIBE_ON, false));
+  CHECK(!td_link_alert_showing(&l, T0 + 500)); /* no fresh plate either */
+  /* no marker, a marker from the future (clock change) or an old one: a new outage */
+  TdLink a = {false, T0, false}, b = {false, T0, false}, c = {false, T0, false};
+  CHECK(!td_link_resume(&a, 0, T0));
+  CHECK(!td_link_resume(&b, T0 + 1000, T0));
+  CHECK(!td_link_resume(&c, T0 - TD_LINK_ALERT_MEMORY_S - 1, T0));
+  CHECK(!a.alert_done && !b.alert_done && !c.alert_done && a.lost_at == T0);
+  CHECK(td_link_alert_delay_s(&a, TD_VIBE_ON, T0) == TD_LINK_ALERT_DELAY_S);
+}
+
+TEST(second_zone_apply_clears_stale_offset) {
+  CHECK(td_tz2_apply(true, true, 540) == TD_TZ2_SET);
+  /* city changed with no offset, or an explicit unavailable: the stale one must go */
+  CHECK(td_tz2_apply(true, false, 0) == TD_TZ2_CLEAR);
+  CHECK(td_tz2_apply(true, true, TD_TZ2_OFFSET_UNAVAILABLE) == TD_TZ2_CLEAR);
+  CHECK(td_tz2_apply(false, true, TD_TZ2_OFFSET_UNAVAILABLE) == TD_TZ2_CLEAR);
+  CHECK(td_tz2_apply(false, true, 15 * 60) == TD_TZ2_CLEAR); /* out of range */
+  /* a weather-only send carries the offset or nothing */
+  CHECK(td_tz2_apply(false, true, -300) == TD_TZ2_SET);
+  CHECK(td_tz2_apply(false, false, 0) == TD_TZ2_KEEP);
+  CHECK(!td_tz2_offset_valid(TD_TZ2_OFFSET_UNAVAILABLE));
 }
 
 TEST(peek_opens_steps_screen) {
@@ -914,6 +975,10 @@ int main(void) {
   RUN(second_zone_label);
   RUN(sun_next_event);
   RUN(link_alert_plate_and_buzz);
+  RUN(link_alert_arms_for_startup_outage_and_late_enable);
+  RUN(link_alert_once_per_outage);
+  RUN(link_alert_relaunch_in_same_outage_stays_silent);
+  RUN(second_zone_apply_clears_stale_offset);
   RUN(peek_opens_steps_screen);
   RUN(tiny_font_covers_every_hud_string);
   printf("C logic: %d checks, %d failures\n", s_checks, s_failures);

@@ -56,7 +56,8 @@
       "TZ2",
       "TZ2_OFFSET",
       "SUNRISE",
-      "SUNSET"
+      "SUNSET",
+      "TZ2_OFFSET_CITY"
     ],
     "resources": {
       "media": [

@@ -21,8 +21,15 @@ The face is built as a dense MAGI-style HUD: large readable time, NERV logo bloc
   - At 10% or less it becomes an inverted red plate.
   - `CHG 40%` shows while charging. `EXT 100%` shows when plugged in but not charging.
 - Phone link: the `MAGI` tag becomes `LINK LOST` while the Pebble app is disconnected.
-  - Optional **Phone disconnect alert** (off by default): if the link stays down for 10 seconds the watch buzzes twice, and `LINK LOST` shows as an inverted yellow plate for the first minute. It never buzzes during Quiet Time, and a link back within 10 seconds stays silent.
+  - Optional **Phone disconnect alert** (off by default). Exact policy:
+    - **When:** twice-short buzz once the link has been down for 10 seconds, plus `LINK LOST` as an inverted yellow plate for the first minute of the outage. A link back within 10 seconds cancels it, so a brief flap stays silent.
+    - **Armed:** on a disconnect while the face runs; when the face starts while the phone is already disconnected (10 seconds from launch); and when the setting is turned on during an outage (10 seconds from the loss, or about a second later if the outage is already older).
+    - **Quiet Time:** checked when the 10 seconds are up. If it is on, there is no buzz, and that outage does not buzz later when Quiet Time ends.
+    - **Once per outage:** the buzz is decided once for each outage, whether or not it buzzed. Turning the setting off and on again, or a repeated disconnect callback, does not buzz again. A reconnect ends the outage, so the next loss can buzz.
+    - **Relaunching the face:** the outage's start is saved when it is decided, and cleared on reconnect. A relaunch while still offline within 6 hours of that start (for example after another watchface or app was used) stays silent and shows no new plate. If the phone reconnected while the face was not running, the saved marker is stale and the next outage in those 6 hours stays silent too.
 - Optional **Second time zone** (off by default): the label above the time reads `LOCAL TIME // TYO 04:05` (or `PM NYC 2:05PM` in 12-hour mode). Choose from 17 cities. The phone works out the city's current UTC offset, daylight saving included, and refreshes it with each weather update.
+  - If the phone cannot compute the offset (no Intl time-zone data) it sends an explicit "unavailable" instead of standard time. The watch then shows no second zone and clears the stored offset, rather than showing a time an hour out. Changing city also clears the old offset until the new one arrives.
+  - Weather updates carry only the offset, never watch settings. The phone sends an offset only for a city it knows the watch has: one the watch acknowledged, or one the watch reported itself after the phone's storage was lost (the phone then asks the watch for its settings). Until then the second zone stays blank rather than risk another city's offset under this city's label. If the settings send fails, the offset is not sent either.
 - Quiet Time: a cyan crescent moon and `QUIET` tag sits in the top bar while Quiet Time is on. It is checked every minute, so it can lag a toggle by up to a minute.
 - Honest health data:
   - BIO shows the firmware's filtered heart rate. The SDK guarantees it is at most 15 minutes old.

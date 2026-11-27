@@ -14,6 +14,7 @@
 #define PERSIST_TZ2_OFFSET 1017
 #define PERSIST_SUNRISE 1018
 #define PERSIST_SUNSET 1019
+#define PERSIST_LINK_LOST 1020 /* start of the outage whose disconnect alert was decided; cleared on reconnect */
 static const uint32_t s_setting_keys[TD_SETTING_COUNT] = {1001, 1003, 1004, 1005, 1006, 1007, 1008, 1009,
                                                           1015, 1016};
 
@@ -36,6 +37,7 @@ extern uint32_t MESSAGE_KEY_SHAKE_FX;
 extern uint32_t MESSAGE_KEY_LINK_VIBE;
 extern uint32_t MESSAGE_KEY_TZ2;
 extern uint32_t MESSAGE_KEY_TZ2_OFFSET;
+extern uint32_t MESSAGE_KEY_TZ2_OFFSET_CITY;
 extern uint32_t MESSAGE_KEY_SUNRISE;
 extern uint32_t MESSAGE_KEY_SUNSET;
 
@@ -1756,6 +1758,8 @@ static void receive_forecast(DictionaryIterator *iterator, int64_t ts) {
 
 /* ---------- Handlers ---------- */
 
+static void link_alert_arm(void);
+
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
   const uint32_t keys[TD_SETTING_COUNT] = SETTING_MESSAGE_KEYS;
   TdSettings next = s_settings;
@@ -1771,6 +1775,8 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
   if (changed & (1u << TD_SET_MOTION)) anim_cancel("setting");
   if (changed & ((1u << TD_SET_MOTION) | (1u << TD_SET_SHAKE) | (1u << TD_SET_SHAKE_FX))) peek_close("setting");
   peek_sync_subscription();
+  /* turned on mid-outage: arm for the outage in progress; turned off: disarm */
+  if (changed & (1u << TD_SET_LINK_VIBE)) link_alert_arm();
 
   Tuple *temp = dict_find(iterator, MESSAGE_KEY_TEMPERATURE);
   if (temp && (temp->type == TUPLE_INT || temp->type == TUPLE_UINT)) {
@@ -1794,12 +1800,23 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
   }
 
   Tuple *tz2 = dict_find(iterator, MESSAGE_KEY_TZ2_OFFSET);
-  if (tz2 && (tz2->type == TUPLE_INT || tz2->type == TUPLE_UINT) && td_tz2_offset_valid((int)tuple_int(tz2))) {
+  Tuple *tz_city = dict_find(iterator, MESSAGE_KEY_TZ2_OFFSET_CITY);
+  if (!tz_city) tz_city = dict_find(iterator, MESSAGE_KEY_TZ2);
+  bool city_matches = tz_city && (tz_city->type == TUPLE_INT || tz_city->type == TUPLE_UINT) &&
+                      tuple_int(tz_city) == s_settings.v[TD_SET_TZ2] && s_settings.v[TD_SET_TZ2] != 0;
+  bool tz2_has = city_matches && tz2 && (tz2->type == TUPLE_INT || tz2->type == TUPLE_UINT);
+  TdTz2Action tz2_action = td_tz2_apply((changed & (1u << TD_SET_TZ2)) != 0, tz2_has,
+                                        tz2_has ? (int)tuple_int(tz2) : 0);
+  if (tz2_action == TD_TZ2_SET) {
     s_tz2_offset = (int)tuple_int(tz2);
     if (!s_tz2_have || persist_read_int(PERSIST_TZ2_OFFSET) != s_tz2_offset) {
       persist_write_int(PERSIST_TZ2_OFFSET, s_tz2_offset);
     }
     s_tz2_have = true;
+  } else if (tz2_action == TD_TZ2_CLEAR) {
+    /* unavailable on the phone, or the city changed: never keep showing the old zone's offset */
+    s_tz2_have = false;
+    if (persist_exists(PERSIST_TZ2_OFFSET)) persist_delete(PERSIST_TZ2_OFFSET);
   }
   Tuple *rise = dict_find(iterator, MESSAGE_KEY_SUNRISE);
   Tuple *set = dict_find(iterator, MESSAGE_KEY_SUNSET);
@@ -1830,7 +1847,14 @@ static void battery_handler(BatteryChargeState state) {
 
 static void link_buzz_fire(void *context) {
   s_link_buzz_timer = NULL;
-  if (td_link_should_buzz(&s_link, s_settings.v[TD_SET_LINK_VIBE], quiet_time_is_active())) {
+  if (s_link.connected || s_link.alert_done || connection_service_peek_pebble_app_connection() ||
+      s_settings.v[TD_SET_LINK_VIBE] != TD_VIBE_ON) return;
+  bool buzz = td_link_should_buzz(&s_link, s_settings.v[TD_SET_LINK_VIBE], quiet_time_is_active());
+  /* Decided for this outage, buzzed or not (Quiet Time included): not repeated by another timer,
+   * the setting being toggled, or a relaunch of the face while the outage lasts. */
+  td_link_alert_done(&s_link);
+  persist_write_int(PERSIST_LINK_LOST, (int32_t)s_link.lost_at);
+  if (buzz) {
     static const uint32_t pattern[] = {150, 120, 150};
     VibePattern vp = {.durations = pattern, .num_segments = ARRAY_LENGTH(pattern)};
     vibes_enqueue_custom_pattern(vp);
@@ -1853,16 +1877,27 @@ static void link_alert_cancel(void) {
   }
 }
 
+/* Arms the buzz and the plate expiry for the outage in progress, or nothing when the link is up,
+ * the setting is off or the outage was already decided. Idempotent: call it whenever the link,
+ * the setting or the launch state changes. The buzz waits until the link has been down for
+ * TD_LINK_ALERT_DELAY_S, so a brief flap stays silent. */
+static void link_alert_arm(void) {
+  link_alert_cancel();
+  if (s_link.connected || s_settings.v[TD_SET_LINK_VIBE] != TD_VIBE_ON) return;
+  int64_t now = time(NULL);
+  int64_t plate_left = s_link.lost_at + TD_LINK_ALERT_SHOW_S - now;
+  if (plate_left > 0) s_link_plate_timer = app_timer_register((uint32_t)plate_left * 1000, link_plate_expired, NULL);
+  int delay = td_link_alert_delay_s(&s_link, s_settings.v[TD_SET_LINK_VIBE], now);
+  if (delay > 0) s_link_buzz_timer = app_timer_register((uint32_t)delay * 1000, link_buzz_fire, NULL);
+}
+
 static void app_connection_handler(bool connected) {
-  bool was_connected = s_link.connected;
   bool restored = td_link_update(&s_link, connected, time(NULL));
   if (connected) {
     link_alert_cancel();
-  } else if (was_connected && s_settings.v[TD_SET_LINK_VIBE] == TD_VIBE_ON) {
-    /* Buzz only if the link stays down, so a brief flap stays silent. */
-    link_alert_cancel();
-    s_link_buzz_timer = app_timer_register(TD_LINK_ALERT_DELAY_S * 1000, link_buzz_fire, NULL);
-    s_link_plate_timer = app_timer_register(TD_LINK_ALERT_SHOW_S * 1000, link_plate_expired, NULL);
+    if (persist_exists(PERSIST_LINK_LOST)) persist_delete(PERSIST_LINK_LOST);
+  } else {
+    link_alert_arm();
   }
   if (connected) {
     td_weather_note_reconnect(&s_wx_sched);
@@ -1964,7 +1999,13 @@ static void init(void) {
   if (persist_exists(PERSIST_SUNSET)) s_sunset = persist_read_int(PERSIST_SUNSET);
   td_anim_init(&s_anim, persist_exists(PERSIST_LAST_FULL) ? persist_read_int(PERSIST_LAST_FULL) : 0);
   bool connected = connection_service_peek_pebble_app_connection();
-  s_link = (TdLink){connected, connected ? 0 : time(NULL)};
+  s_link = (TdLink){connected, connected ? 0 : time(NULL), false};
+  if (connected) {
+    if (persist_exists(PERSIST_LINK_LOST)) persist_delete(PERSIST_LINK_LOST);
+  } else if (persist_exists(PERSIST_LINK_LOST)) {
+    /* relaunched in an outage that already got its alert: stay silent for it */
+    td_link_resume(&s_link, persist_read_int(PERSIST_LINK_LOST), time(NULL));
+  }
 
   s_main_window = window_create();
   window_set_background_color(s_main_window, GColorBlack);
@@ -1984,6 +2025,7 @@ static void init(void) {
     .pebble_app_connection_handler = app_connection_handler,
   });
   peek_sync_subscription();
+  link_alert_arm(); /* launched while already offline */
   window_stack_push(s_main_window, false);
 }
 

@@ -29,7 +29,8 @@ var SETTINGS = {
   TZ2: {max: 17, def: 0} /* second time zone: index into TZ2_CITIES, 0 off */
 };
 /* Second time zone choices. Same order and codes as s_tz2_labels in src/c/td_logic.c.
- * std is the standard UTC offset in minutes, used only where Intl time zones are missing. */
+ * std is the standard (non-DST) UTC offset in minutes. It is reference data only and is never
+ * sent as a fallback: it is an hour wrong for part of the year in DST zones. */
 var TZ2_CITIES = [
   null,
   {code: 'LON', name: 'London', tz: 'Europe/London', std: 0},
@@ -50,6 +51,9 @@ var TZ2_CITIES = [
   {code: 'SAO', name: 'Sao Paulo', tz: 'America/Sao_Paulo', std: -180},
   {code: 'UTC', name: 'UTC', tz: 'UTC', std: 0}
 ];
+/* TZ2_OFFSET value meaning "this city's offset cannot be computed": the watch drops any offset
+ * it has stored. Same value as TD_TZ2_OFFSET_UNAVAILABLE in src/c/td_logic.h. */
+var TZ2_UNAVAILABLE = 9999;
 var FORECAST_HOURS = 12;
 var SETTING_NAMES = Object.keys(SETTINGS);
 
@@ -131,7 +135,9 @@ function createQueue(env) {
       }, T.RETRY_DELAYS_MS[item.tries - 1]);
     }
 
-    env.sendAppMessage(item.msg, function() { settle(true); }, function() { settle(false, 'nack'); });
+    /* a function is evaluated now, so it sees the state at send time rather than queue time */
+    var msg = typeof item.msg === 'function' ? item.msg() : item.msg;
+    env.sendAppMessage(msg, function() { settle(true); }, function() { settle(false, 'nack'); });
   }
 
   function enqueue(kind, msg, onSuccess, onFail) {
@@ -158,6 +164,10 @@ function createPhone(env) {
   var fetching = false;
   var guardTimer = null;
   var plugin = {sub: null, off: !env.subscribeToSource, latest: null, waiter: null};
+  /* True once the watch is known to be on the city in the phone's saved TZ2: it acked a settings
+   * send carrying TZ2, or reported its own TZ2. Until then no offset is sent, so an offset for
+   * one city is never shown under another city's label. */
+  var tz2Synced = false;
 
   function nowS() { return Math.floor(env.now() / 1000); }
 
@@ -201,10 +211,13 @@ function createPhone(env) {
 
   /* Second-zone offset and the next sunrise/sunset, added to what goes to the watch. Both are
    * refreshed with every weather send, so a DST change is picked up within the refresh period. */
-  function addExtras(msg, tz2Index) {
-    var idx = tz2Index !== undefined ? tz2Index : (sanitizeSettings(readJson(SETTINGS_KEY)).TZ2 || 0);
-    var off = tz2Offset(idx, env.now());
-    if (off !== null) msg.TZ2_OFFSET = off;
+  function addExtras(msg) {
+    var idx = sanitizeSettings(readJson(SETTINGS_KEY)).TZ2;
+    var off = tz2Synced && idx ? tz2Value(idx, env.now()) : null;
+    if (off !== null) {
+      msg.TZ2_OFFSET = off;
+      msg.TZ2_OFFSET_CITY = idx;
+    }
     var loc = savedLocation();
     if (loc) {
       var sun = nextSunEvents(loc.lat, loc.lon, env.now());
@@ -231,23 +244,32 @@ function createPhone(env) {
     if (!Object.keys(settings).length) return;
     var msg = {};
     Object.keys(settings).forEach(function(k) { msg[k] = settings[k]; });
-    if (settings.TZ2 !== undefined) {
-      var off = tz2Offset(settings.TZ2, env.now());
+    var hasCity = settings.TZ2 !== undefined;
+    if (hasCity) {
+      tz2Synced = false; /* until the watch acks this city */
+      var off = tz2Value(settings.TZ2, env.now());
       if (off !== null) msg.TZ2_OFFSET = off;
     }
-    queue.enqueue('settings', msg);
+    queue.enqueue('settings', msg, hasCity ? function() {
+      /* a newer webview save may have changed the city since this send was built */
+      if (sanitizeSettings(readJson(SETTINGS_KEY)).TZ2 === settings.TZ2) tz2Synced = true;
+    } : undefined);
   }
 
   function sendWeather(temp, ts, fc) {
-    var msg = addExtras({TEMPERATURE: temp, WEATHER_TIME: ts});
-    if (fc) {
-      msg.FORECAST_START = fc.start;
-      /* byte arrays: temperatures as signed bytes */
-      msg.FORECAST_TEMPS = fc.temps.map(function(t) { return t & 0xff; });
-      msg.FORECAST_RAIN = fc.rain;
-      msg.FORECAST_CODES = fc.codes;
+    /* built when it is sent, so the offset reflects the city the watch has acked by then */
+    function build() {
+      var msg = addExtras({TEMPERATURE: temp, WEATHER_TIME: ts});
+      if (fc) {
+        msg.FORECAST_START = fc.start;
+        /* byte arrays: temperatures as signed bytes */
+        msg.FORECAST_TEMPS = fc.temps.map(function(t) { return t & 0xff; });
+        msg.FORECAST_RAIN = fc.rain;
+        msg.FORECAST_CODES = fc.codes;
+      }
+      return msg;
     }
-    queue.enqueue('weather', msg, function() {
+    queue.enqueue('weather', build, function() {
       var cache = readJson(WEATHER_KEY) || {};
       if (cache.ts === ts) {
         cache.deliveredTs = nowS();
@@ -402,6 +424,15 @@ function createPhone(env) {
     if (!payload) return null;
     var fromWatch = sanitizeSettings(payload);
     if (Object.keys(fromWatch).length) saveSettings(fromWatch);
+    if (fromWatch.TZ2 !== undefined) {
+      /* the watch told us its city (after phone storage was lost, say): from here the offset is
+       * safe to send. Send it on its own now, without any setting. */
+      tz2Synced = true;
+      var off = tz2Value(fromWatch.TZ2, env.now());
+      if (off !== null) queue.enqueue('tz2', function() {
+        return {TZ2_OFFSET: tz2Value(fromWatch.TZ2, env.now()), TZ2_OFFSET_CITY: fromWatch.TZ2};
+      });
+    }
     if (payload.REQUEST_WEATHER) return requestWeather('watch');
     return null;
   }
@@ -440,7 +471,16 @@ function num(v) {
   return typeof v === 'number' && !isNaN(v);
 }
 
-/* Current UTC offset in minutes of a TZ2_CITIES entry (DST included), or null when off. */
+/* What to send as TZ2_OFFSET: null when the second zone is off, TZ2_UNAVAILABLE when the offset
+ * cannot be computed, otherwise the offset in minutes. */
+function tz2Value(index, nowMs) {
+  if (!TZ2_CITIES[index]) return null;
+  var off = tz2Offset(index, nowMs);
+  return off === null ? TZ2_UNAVAILABLE : off;
+}
+
+/* Current UTC offset in minutes of a TZ2_CITIES entry (DST included), or null when the zone is
+ * off or Intl cannot compute it. There is deliberately no standard-time fallback. */
 function tz2Offset(index, nowMs) {
   var city = TZ2_CITIES[index];
   if (!city) return null;
@@ -454,9 +494,9 @@ function tz2Offset(index, nowMs) {
     var off = Math.round((asUtc - Math.floor(nowMs / 60000) * 60000) / 60000);
     if (num(off) && off >= -720 && off <= 840) return off;
   } catch (e) {
-    /* no Intl time-zone data on this phone: fall through to the standard offset */
+    /* no Intl time-zone data on this phone */
   }
-  return city.std;
+  return null;
 }
 
 var RAD = Math.PI / 180;
@@ -617,7 +657,7 @@ function buildConfigHtml(settings) {
     'Shake to show opens the forecast or a heart-rate graph for 10 seconds, then plays the transition back to the face; shake again to return sooner. ' +
     'With animations Off or a low battery it opens without the transition. ' +
     'Steps vs typical day compares today with the watch\'s own average for a weekday or weekend day; the yellow marker is where you usually are by now. ' +
-    'The disconnect alert buzzes if the phone stays away for 10 seconds, never during Quiet Time. ' +
+    'The disconnect alert buzzes once per outage, if the phone has been away for 10 seconds, never during Quiet Time. ' +
     'Sunrise and sunset are worked out on the phone from your location, checked at most once a day.</div>' +
     '</div><script>' +
     'document.getElementById("save").onclick=function(){var s={};' + JSON.stringify(SETTING_NAMES) +
@@ -634,6 +674,9 @@ module.exports = {
   parseForecast: parseForecast,
   parsePluginWeather: parsePluginWeather,
   tz2Offset: tz2Offset,
+  tz2Value: tz2Value,
+  TZ2_UNAVAILABLE: TZ2_UNAVAILABLE,
+  SETTING_KEYS: SETTING_NAMES,
   nextSunEvents: nextSunEvents,
   TZ2_CITIES: TZ2_CITIES,
   LOCATION_KEY: LOCATION_KEY,

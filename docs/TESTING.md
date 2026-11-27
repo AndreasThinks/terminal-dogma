@@ -19,6 +19,8 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 - Shake-to-show settings and migrations, forecast validation and expiry, weather labels and conversion, and heart-rate statistics with gaps.
 - Shake-screen transitions: open, hold, reverse return, early return on another shake, reversing during the opening, debounce, and hard-cut behavior with animations off or low battery.
 - Steps pace (rail fill, marker, ahead/behind text), second-zone formatting, next sunrise/sunset choice, the disconnect alert timing, and glyph coverage for every string drawn in the 3x5 HUD font.
+- Disconnect alert policy: arming at startup offline and when enabled mid-outage (10-second floor), once per outage, Quiet Time, and silent relaunch in the same outage (marker accepted, rejected when absent, in the future or older than 6 hours).
+- Second-zone offset handling: store, clear on unavailable or invalid, clear on city change, keep on weather-only messages.
 
 **JavaScript tests cover:**
 
@@ -26,7 +28,15 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 - AppMessage serialization, bounded retries, lost callbacks, and same-kind coalescing.
 - Weather caching and refresh behavior, including incomplete hourly forecasts, stale readings, request failures, and geolocation timeouts.
 - Forecast encoding and validation, shake settings, and the configuration page.
-- Second-zone offsets across daylight saving, sunrise/sunset accuracy against published times, and the once-a-day location lookup on the plugin weather path.
+- Second-zone offsets across daylight saving, with Intl forced to fail: no standard-time fallback, explicit unavailable on settings, weather and recovery sends; offsets withheld until the watch has acked or reported the city; weather-only sends never carry settings; recovery of the city from the watch after phone storage loss.
+- Sunrise/sunset accuracy against published times, and the once-a-day location lookup on the plugin weather path.
+
+## Not covered by host tests
+
+The host suite covers decisions in `td_logic.c`, not the full Pebble runtime. For 1.0.23, 735 C and 174 JS checks passed and a clean Pebble SDK 4.44 build succeeded. On the built PBW in private Emery QEMU, a mismatched city update left the displayed clock intact and a matching unavailable update cleared it. With debugger-injected offline state, changing the alert setting armed the native timer and showed the inverted `LINK LOST` plate; after the delay the timer completed and marked the alert handled. This does not verify a Bluetooth transition or physical vibration. Physical-watch checks:
+
+- Disconnect alert on: start the face with the phone disconnected (expect one buzz about 10 s later); enable it from the phone mid-outage; reconnect within 10 s (silent); enable Quiet Time (silent, and no late buzz); switch to another watchface and back during the outage (silent).
+- Second zone on: change city and confirm the old city's time never shows; force Intl failure on the phone if possible and confirm the zone clears.
 
 ## Emery emulator checks
 

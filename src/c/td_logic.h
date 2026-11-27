@@ -129,6 +129,13 @@ const char *td_tz2_label(int index);
  * current UTC offset in minutes (the phone supplies it, DST included). */
 void td_format_tz2(char *buf, size_t n, int index, int64_t utc_now, int offset_min, bool use_24h);
 bool td_tz2_offset_valid(int offset_min);
+/* TZ2_OFFSET value from the phone meaning "cannot be computed" (outside the valid range). */
+#define TD_TZ2_OFFSET_UNAVAILABLE 9999
+typedef enum { TD_TZ2_KEEP, TD_TZ2_SET, TD_TZ2_CLEAR } TdTz2Action;
+/* What to do with the stored offset for an incoming message: city_changed is whether it changed
+ * TZ2, has_offset whether it carried TZ2_OFFSET. A valid offset is stored; an unavailable or
+ * invalid one, or a city change with no offset, clears it; otherwise it is left alone. */
+TdTz2Action td_tz2_apply(bool city_changed, bool has_offset, int offset_min);
 
 /* ---------- Sunrise and sunset ---------- */
 /* The next of the two events still in the future: returns its time and sets *is_sunset,
@@ -160,18 +167,32 @@ void td_format_power(char *buf, size_t n, int pct, TdBattState st);
 void td_format_time(char *time_buf, size_t n, char meridiem[3], int hour, int min, bool use_24h);
 
 #define TD_LINK_MEANINGFUL_OUTAGE_S 60
-typedef struct { bool connected; int64_t lost_at; } TdLink;
+/* alert_done: the disconnect alert has already been decided (buzzed, or skipped for Quiet
+ * Time) for the current outage, so it is not decided again. Cleared when a new outage starts. */
+typedef struct { bool connected; int64_t lost_at; bool alert_done; } TdLink;
 /* Returns true only on a disconnected -> connected edge after an outage of at
  * least TD_LINK_MEANINGFUL_OUTAGE_S. Brief flaps are ignored. */
 bool td_link_update(TdLink *l, bool connected, int64_t now);
 #define TD_LINK_ALERT_DELAY_S 10 /* buzz only if the link is still down after this */
 #define TD_LINK_ALERT_SHOW_S 60  /* the LINK LOST plate shows this long after the loss */
+/* A launch while still offline treats an outage buzzed within this long as the same outage. */
+#define TD_LINK_ALERT_MEMORY_S (6 * 60 * 60)
 /* True while the inverted LINK LOST plate should show: link down for less than
  * TD_LINK_ALERT_SHOW_S. The buzz itself is decided by td_link_should_buzz. */
 bool td_link_alert_showing(const TdLink *l, int64_t now);
-/* The delayed disconnect buzz: on when the setting is on, the link is still down, and
- * Quiet Time is off. */
+/* The delayed disconnect buzz: on when the setting is on, the link is still down, Quiet Time
+ * is off and this outage has not been decided already. */
 bool td_link_should_buzz(const TdLink *l, int vibe_setting, bool quiet_time);
+/* Seconds until the alert decision is due for the current outage (never less than 1), or -1
+ * when nothing should be armed: setting off, link up, or outage already decided. Covers a
+ * launch while offline and the setting being turned on mid-outage. */
+int td_link_alert_delay_s(const TdLink *l, int vibe_setting, int64_t now);
+/* Mark the current outage as decided (call when the timer fires, buzz or not). */
+void td_link_alert_done(TdLink *l);
+/* On a launch while offline: if lost_at_marker (persisted when an earlier launch decided the
+ * alert) is a plausible earlier time within TD_LINK_ALERT_MEMORY_S, adopt it as this outage's
+ * start and mark it decided. Returns true when it did. */
+bool td_link_resume(TdLink *l, int64_t lost_at_marker, int64_t now);
 
 /* ---------- MAGI checks ---------- */
 typedef enum { TD_VOTE_PENDING, TD_VOTE_PASS, TD_VOTE_LOW, TD_VOTE_LOST, TD_VOTE_OLD, TD_VOTE_NONE } TdVote;

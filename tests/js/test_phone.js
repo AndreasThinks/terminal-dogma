@@ -486,10 +486,18 @@ test('plugin weather is parsed from the current hour, in Celsius, with mapped co
   eq(f.fc.temps[0], 14, '58°F -> 14°C');
 });
 
-test('second time zone offset follows DST and falls back to standard time', function() {
-  var nyc = phoneLib.TZ2_CITIES.map(function(c) { return c && c.code; }).indexOf('NYC');
-  eq(phoneLib.tz2Offset(nyc, Date.UTC(2026, 0, 15, 12)), -300, 'EST in January');
-  eq(phoneLib.tz2Offset(nyc, Date.UTC(2026, 6, 15, 12)), -240, 'EDT in July');
+var NYC = phoneLib.TZ2_CITIES.map(function(c) { return c && c.code; }).indexOf('NYC');
+
+/* Runs fn with Intl time-zone formatting broken, as on a phone without time-zone data. */
+function withoutIntl(fn) {
+  var real = Intl.DateTimeFormat;
+  Intl.DateTimeFormat = function() { throw new RangeError('Invalid time zone'); };
+  try { fn(); } finally { Intl.DateTimeFormat = real; }
+}
+
+test('second time zone offset follows DST', function() {
+  eq(phoneLib.tz2Offset(NYC, Date.UTC(2026, 0, 15, 12)), -300, 'EST in January');
+  eq(phoneLib.tz2Offset(NYC, Date.UTC(2026, 6, 15, 12)), -240, 'EDT in July');
   eq(phoneLib.tz2Offset(8, Date.UTC(2026, 6, 15, 12)), 540, 'Tokyo');
   eq(phoneLib.tz2Offset(0, Date.UTC(2026, 6, 15, 12)), null, 'off');
   eq(phoneLib.TZ2_CITIES.length, 18, 'matches TD_TZ2_CITY_COUNT on the watch');
@@ -497,6 +505,116 @@ test('second time zone offset follows DST and falls back to standard time', func
   var p = phoneLib.createPhone(env);
   p.onWebviewClosed(encodeURIComponent(JSON.stringify({TZ2: 8, LINK_VIBE: 1})));
   eq(env.sent[0].msg, {LINK_VIBE: 1, TZ2: 8, TZ2_OFFSET: 540}, 'offset travels with the setting');
+});
+
+test('second time zone never falls back to standard time when Intl cannot compute DST', function() {
+  withoutIntl(function() {
+    eq(phoneLib.tz2Offset(NYC, Date.UTC(2026, 6, 15, 12)), null, 'no offset, not -300');
+    eq(phoneLib.tz2Value(NYC, Date.UTC(2026, 6, 15, 12)), phoneLib.TZ2_UNAVAILABLE, 'explicit unavailable');
+    eq(phoneLib.tz2Value(0, Date.UTC(2026, 6, 15, 12)), null, 'Off is not unavailable');
+    var env = makeEnv();
+    var p = phoneLib.createPhone(env);
+    p.onWebviewClosed(encodeURIComponent(JSON.stringify({TZ2: NYC})));
+    eq(env.sent[0].msg, {TZ2: NYC, TZ2_OFFSET: phoneLib.TZ2_UNAVAILABLE}, 'settings send says unavailable');
+  });
+  eq(phoneLib.TZ2_UNAVAILABLE, 9999, 'sentinel shared with TD_TZ2_OFFSET_UNAVAILABLE');
+});
+
+test('weather sends carry the offset only for a city the watch is known to have', function() {
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.onWebviewClosed(encodeURIComponent(JSON.stringify({TZ2: 8})));
+  p.requestWeather('watch');
+  respond(env.xhrs[0], 200, GOOD);
+  eq(env.sent.length, 1, 'weather queued behind the unacked settings');
+  env.sent[0].ok();
+  eq(env.sent[1].msg.TZ2_OFFSET, 540, 'acked city: offset sent');
+  eq(env.sent[1].msg.TZ2_OFFSET_CITY, 8, 'offset is bound to Tokyo without changing settings');
+  check(env.sent[1].msg.TZ2 === undefined, 'weather send does not carry a setting');
+  eq(Object.keys(env.sent[1].msg).filter(function(k) { return phoneLib.SETTING_KEYS.indexOf(k) >= 0; }), [],
+     'no watch setting in a weather-only send');
+});
+
+test('a city change not yet acked by the watch sends no offset for the new city', function() {
+  var env = makeEnv();
+  env.storage.setItem(phoneLib.SETTINGS_KEY, JSON.stringify({TZ2: 8}));
+  var p = phoneLib.createPhone(env);
+  p.onReady();
+  env.sent[0].ok();                       /* watch has Tokyo */
+  p.onWebviewClosed(encodeURIComponent(JSON.stringify({TZ2: NYC})));
+  p.requestWeather('watch');              /* cache is old: fetches */
+  respond(env.xhrs[0], 200, GOOD);
+  var w = env.sent.filter(function(r) { return r.msg.TEMPERATURE !== undefined; });
+  eq(w.length, 0, 'weather still behind the unacked settings');
+  env.sent[1].ok();
+  w = env.sent.filter(function(r) { return r.msg.TEMPERATURE !== undefined; });
+  eq(w[0].msg.TZ2_OFFSET, phoneLib.tz2Offset(NYC, env.now()), 'offset follows once NYC is acked');
+});
+
+test('a failed city change never sends the new city offset against the old label', function() {
+  var env = makeEnv();
+  env.storage.setItem(phoneLib.SETTINGS_KEY, JSON.stringify({TZ2: 8}));
+  var p = phoneLib.createPhone(env);
+  p.onReady();
+  env.sent[0].ok();
+  p.onWebviewClosed(encodeURIComponent(JSON.stringify({TZ2: NYC})));
+  T.RETRY_DELAYS_MS.forEach(function(delay) { env.last().fail(); env.advance(delay); });
+  env.last().fail();
+  check(env.logs.some(function(log) { return log.indexOf('send settings gave up') >= 0; }), 'the settings send actually exhausted its retries');
+  p.requestWeather('watch');
+  respond(env.xhrs[0], 200, GOOD);
+  var w = env.sent.filter(function(r) { return r.msg.TEMPERATURE !== undefined; });
+  check(w.length === 1 && w[0].msg.TZ2_OFFSET === undefined, 'weather carries no offset after the give-up');
+});
+
+test('unavailable offset is sent explicitly on weather and sun sends, not omitted', function() {
+  var env = makeEnv();
+  env.storage.setItem(phoneLib.SETTINGS_KEY, JSON.stringify({TZ2: NYC}));
+  var p = phoneLib.createPhone(env);
+  withoutIntl(function() {
+    p.onReady();
+    env.sent[0].ok();
+    p.requestWeather('watch');
+    respond(env.xhrs[0], 200, GOOD);
+    var w = env.sent.filter(function(r) { return r.msg.TEMPERATURE !== undefined; })[0];
+    eq(w.msg.TZ2_OFFSET, phoneLib.TZ2_UNAVAILABLE, 'weather says unavailable');
+  });
+});
+
+test('Off never sends an offset, and weather-only sends never carry TZ2 itself', function() {
+  var env = makeEnv();
+  env.storage.setItem(phoneLib.SETTINGS_KEY, JSON.stringify({TZ2: 0}));
+  var p = phoneLib.createPhone(env);
+  p.onReady();
+  env.sent[0].ok();
+  p.requestWeather('watch');
+  respond(env.xhrs[0], 200, GOOD);
+  var w = env.sent[env.sent.length - 1].msg;
+  check(w.TZ2_OFFSET === undefined && w.TZ2 === undefined, 'nothing second-zone in weather');
+});
+
+test('phone cache loss: the watch settings (city included) are recovered, then the offset follows', function() {
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.onReady();
+  eq(env.sent[0].msg, {REQUEST_SETTINGS: 1}, 'asks the watch, pushes no defaults');
+  env.sent[0].ok();
+  p.onAppMessage({CLOCK_FORMAT: 0, ACCENT_COLOR: 1, TZ2: NYC});
+  eq(JSON.parse(env.storage.getItem(phoneLib.SETTINGS_KEY)).TZ2, NYC, 'city recovered from the watch');
+  var off = env.sent.filter(function(r) { return r.msg.TZ2_OFFSET !== undefined; });
+  eq(off.length, 1, 'one offset-only message');
+  eq(off[0].msg, {TZ2_OFFSET: phoneLib.tz2Offset(NYC, env.now()), TZ2_OFFSET_CITY: NYC}, 'offset and city tag only: no settings overwritten');
+});
+
+test('phone settings without a city never send an offset (and so cannot mislabel the watch)', function() {
+  var env = makeEnv();
+  env.storage.setItem(phoneLib.SETTINGS_KEY, JSON.stringify({ACCENT_COLOR: 1}));
+  var p = phoneLib.createPhone(env);
+  p.onReady();
+  env.sent[0].ok();
+  respond(env.xhrs[0], 200, GOOD);
+  var w = env.sent.filter(function(r) { return r.msg.TEMPERATURE !== undefined; })[0];
+  check(w.msg.TZ2_OFFSET === undefined, 'no offset without a known city');
 });
 
 test('next sunrise and sunset are a few minutes from published times', function() {
