@@ -7,11 +7,11 @@
 
 static const int s_defaults[TD_SETTING_COUNT] = {
   TD_CLOCK_SYSTEM, TD_LAYOUT_STEPS_WEATHER, TD_ACCENT_RED, TD_TEMP_C, TD_SYNC_FRESHNESS,
-  TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_SYNC_GRAPH,
+  TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_SYNC_GRAPH, TD_VIBE_OFF, 0,
 };
 static const int s_max[TD_SETTING_COUNT] = {
-  TD_CLOCK_12H, TD_LAYOUT_STEPS_BATTERY, TD_ACCENT_CYAN, TD_TEMP_F, TD_SYNC_AESTHETIC,
-  TD_MOTION_FULL, TD_SHAKE_HEART, TD_FX_EMERGENCY_HEX,
+  TD_CLOCK_12H, TD_LAYOUT_STEPS_BATTERY, TD_ACCENT_CYAN, TD_TEMP_F, TD_SYNC_PACE,
+  TD_MOTION_FULL, TD_SHAKE_STEPS, TD_FX_EMERGENCY_HEX, TD_VIBE_ON, TD_TZ2_CITY_COUNT - 1,
 };
 
 int td_setting_default(int id) {
@@ -186,6 +186,120 @@ int td_scale_y(int v, int lo, int hi, int y_top, int y_bottom) {
   return y_bottom - margin - ((v - lo) * (span - 2 * margin)) / (hi - lo);
 }
 
+/* ---------- Steps pace ---------- */
+
+static int pct_of(int32_t v, int32_t of) {
+  if (of <= 0 || v <= 0) return 0;
+  if (v >= of) return 100;
+  return (int)(((int64_t)v * 100) / of);
+}
+
+int td_pace_fill_pct(const TdPace *p) {
+  return (p && p->valid) ? pct_of(p->today, p->typical_day) : 0;
+}
+
+int td_pace_marker_pct(const TdPace *p) {
+  return (p && p->valid) ? pct_of(p->typical_now, p->typical_day) : -1;
+}
+
+void td_format_pace(char *buf, size_t n, const TdPace *p) {
+  if (!p || !p->valid || p->today < 0 || p->typical_now < 0) {
+    snprintf(buf, n, "--");
+    return;
+  }
+  int32_t diff = p->today - p->typical_now;
+  int32_t mag = diff < 0 ? -diff : diff;
+  if (mag * 100 <= p->typical_now || mag == 0) {
+    snprintf(buf, n, "ON PACE");
+    return;
+  }
+  char num[12];
+  td_format_steps(num, sizeof(num), (TdReading){true, mag});
+  snprintf(buf, n, "%s %s", num, diff < 0 ? "BEHIND" : "AHEAD");
+}
+
+/* ---------- Second time zone ---------- */
+
+/* Same order as TZ2_CITIES in src/pkjs/phone.js. */
+static const char *const s_tz2_labels[TD_TZ2_CITY_COUNT] = {
+  "", "LON", "PAR", "ATH", "DXB", "DEL", "SIN", "HKG", "TYO", "SYD",
+  "AKL", "HNL", "LAX", "DEN", "CHI", "NYC", "SAO", "UTC",
+};
+
+const char *td_tz2_label(int index) {
+  return (index > 0 && index < TD_TZ2_CITY_COUNT) ? s_tz2_labels[index] : "";
+}
+
+bool td_tz2_offset_valid(int offset_min) {
+  return offset_min >= -12 * 60 && offset_min <= 14 * 60;
+}
+
+void td_format_tz2(char *buf, size_t n, int index, int64_t utc_now, int offset_min, bool use_24h) {
+  const char *label = td_tz2_label(index);
+  if (!label[0] || !td_tz2_offset_valid(offset_min)) {
+    if (n) buf[0] = '\0';
+    return;
+  }
+  int64_t local = utc_now + (int64_t)offset_min * 60;
+  int64_t day_s = local % 86400;
+  if (day_s < 0) day_s += 86400;
+  int hour = (int)(day_s / 3600), min = (int)((day_s / 60) % 60);
+  char t[8], mer[3];
+  td_format_time(t, sizeof(t), mer, hour, min, use_24h);
+  snprintf(buf, n, "%s %s%s", label, t, mer);
+}
+
+/* ---------- Sunrise and sunset ---------- */
+
+int64_t td_sun_next(int64_t sunrise, int64_t sunset, int64_t now, bool *is_sunset) {
+  bool rise_ok = sunrise > now, set_ok = sunset > now;
+  if (!rise_ok && !set_ok) return 0;
+  bool pick_set = set_ok && (!rise_ok || sunset < sunrise);
+  if (is_sunset) *is_sunset = pick_set;
+  return pick_set ? sunset : sunrise;
+}
+
+/* ---------- Tiny HUD font ---------- */
+
+static const uint8_t *glyph(char c) {
+  static const uint8_t A[5] = {2, 5, 7, 5, 5}, B[5] = {6, 5, 6, 5, 6}, C[5] = {7, 4, 4, 4, 7},
+    D[5] = {6, 5, 5, 5, 6}, E[5] = {7, 4, 6, 4, 7}, F[5] = {7, 4, 6, 4, 4}, G[5] = {7, 4, 5, 5, 7},
+    H[5] = {5, 5, 7, 5, 5}, I[5] = {7, 2, 2, 2, 7}, J[5] = {1, 1, 1, 5, 7}, K[5] = {5, 5, 6, 5, 5},
+    L[5] = {4, 4, 4, 4, 7}, M[5] = {5, 7, 7, 5, 5}, N[5] = {6, 5, 5, 5, 5}, O[5] = {7, 5, 5, 5, 7},
+    P[5] = {6, 5, 6, 4, 4}, Q[5] = {7, 5, 5, 7, 1}, R[5] = {6, 5, 6, 5, 5}, S[5] = {7, 4, 7, 1, 7},
+    T[5] = {7, 2, 2, 2, 2}, U[5] = {5, 5, 5, 5, 7}, V[5] = {5, 5, 5, 5, 2}, W[5] = {5, 5, 7, 7, 5},
+    X[5] = {5, 5, 2, 5, 5}, Y[5] = {5, 5, 2, 2, 2}, Z[5] = {7, 1, 2, 4, 7};
+  static const uint8_t D0[5] = {7, 5, 5, 5, 7}, D1[5] = {2, 6, 2, 2, 7}, D2[5] = {7, 1, 7, 4, 7},
+    D3[5] = {7, 1, 7, 1, 7}, D4[5] = {5, 5, 7, 1, 1}, D5[5] = {7, 4, 7, 1, 7}, D6[5] = {7, 4, 7, 5, 7},
+    D7[5] = {7, 1, 1, 1, 1}, D8[5] = {7, 5, 7, 5, 7}, D9[5] = {7, 5, 7, 1, 7};
+  static const uint8_t DASH[5] = {0, 0, 7, 0, 0}, SLASH[5] = {1, 1, 2, 4, 4}, COLON[5] = {0, 2, 0, 2, 0},
+    PLUS[5] = {0, 2, 7, 2, 0}, DOT[5] = {0, 0, 0, 0, 2}, SPACE[5] = {0, 0, 0, 0, 0};
+  static const uint8_t *const letters[26] = {A, B, C, D, E, F, G, H, I, J, K, L, M,
+                                              N, O, P, Q, R, S, T, U, V, W, X, Y, Z};
+  static const uint8_t *const digits[10] = {D0, D1, D2, D3, D4, D5, D6, D7, D8, D9};
+  if (c >= 'a' && c <= 'z') c -= 32;
+  if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
+  if (c >= '0' && c <= '9') return digits[c - '0'];
+  switch (c) {
+    case '-': return DASH;
+    case '/': return SLASH;
+    case ':': return COLON;
+    case '+': return PLUS;
+    case '.': return DOT;
+    case ' ': return SPACE;
+    default: return NULL;
+  }
+}
+
+uint8_t td_glyph_row(char c, int row) {
+  const uint8_t *g = glyph(c);
+  return (g && row >= 0 && row < 5) ? g[row] : 0;
+}
+
+bool td_glyph_known(char c) {
+  return glyph(c) != NULL;
+}
+
 /* ---------- Health, power, clock, link ---------- */
 
 void td_format_steps(char *buf, size_t n, TdReading steps) {
@@ -269,6 +383,16 @@ bool td_link_update(TdLink *l, bool connected, int64_t now) {
   }
   l->connected = connected;
   return meaningful;
+}
+
+bool td_link_alert_showing(const TdLink *l, int64_t now) {
+  if (l->connected || l->lost_at <= 0) return false;
+  int64_t age = now - l->lost_at;
+  return age >= 0 && age < TD_LINK_ALERT_SHOW_S;
+}
+
+bool td_link_should_buzz(const TdLink *l, int vibe_setting, bool quiet_time) {
+  return vibe_setting == TD_VIBE_ON && !l->connected && !quiet_time;
 }
 
 /* ---------- MAGI checks ---------- */
@@ -481,7 +605,7 @@ TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms) {
     if (since >= 0 && since < TD_PEEK_DEBOUNCE_MS) return TD_PEEK_NOOP;
     p->cut_by_tap = false;
   }
-  if (env->shake != TD_SHAKE_WEATHER && env->shake != TD_SHAKE_HEART) return TD_PEEK_NOOP;
+  if (env->shake < TD_SHAKE_WEATHER || env->shake > TD_SHAKE_STEPS) return TD_PEEK_NOOP;
   p->screen = env->shake;
   p->fx = env->fx == TD_FX_EMERGENCY_HEX ? TD_FX_EMERGENCY_HEX : TD_FX_SYNC_GRAPH;
   p->t_ms = 0;

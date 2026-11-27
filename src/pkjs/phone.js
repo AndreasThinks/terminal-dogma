@@ -4,6 +4,7 @@
 var SETTINGS_KEY = 'terminal-dogma-settings-v2';
 var LEGACY_SETTINGS_KEY = 'nerv-watchface-settings-v1';
 var WEATHER_KEY = 'terminal-dogma-weather-v1';
+var LOCATION_KEY = 'terminal-dogma-location-v1'; /* last fix, for sunrise and sunset */
 var OPEN_METEO_URL = 'https://api.open-meteo.com/v1/forecast';
 /* Pebble plugin weather source (mobile app 2.0+). Used when it can serve the whole
  * reading; otherwise the face falls back to its own GPS + Open-Meteo fetch. */
@@ -20,15 +21,40 @@ var SETTINGS = {
   BOTTOM_LAYOUT: {max: 2, def: 0},
   ACCENT_COLOR: {max: 3, def: 0},
   TEMP_UNIT: {max: 1, def: 0},
-  SYNC_SOURCE: {max: 3, def: 0},
+  SYNC_SOURCE: {max: 4, def: 0}, /* 4: steps vs typical day */
   ANIMATION: {max: 2, def: 2}, /* 0 off, 1 subtle, 2 full */
-  SHAKE_SCREEN: {max: 2, def: 2}, /* 0 off, 1 weather forecast, 2 heart rate */
-  SHAKE_FX: {max: 1, def: 0} /* 0 Sync Graph, 1 Emergency Hex */
+  SHAKE_SCREEN: {max: 3, def: 2}, /* 0 off, 1 weather forecast, 2 heart rate, 3 steps */
+  SHAKE_FX: {max: 1, def: 0}, /* 0 Sync Graph, 1 Emergency Hex */
+  LINK_VIBE: {max: 1, def: 0}, /* buzz when the phone disconnects */
+  TZ2: {max: 17, def: 0} /* second time zone: index into TZ2_CITIES, 0 off */
 };
+/* Second time zone choices. Same order and codes as s_tz2_labels in src/c/td_logic.c.
+ * std is the standard UTC offset in minutes, used only where Intl time zones are missing. */
+var TZ2_CITIES = [
+  null,
+  {code: 'LON', name: 'London', tz: 'Europe/London', std: 0},
+  {code: 'PAR', name: 'Paris', tz: 'Europe/Paris', std: 60},
+  {code: 'ATH', name: 'Athens', tz: 'Europe/Athens', std: 120},
+  {code: 'DXB', name: 'Dubai', tz: 'Asia/Dubai', std: 240},
+  {code: 'DEL', name: 'Delhi', tz: 'Asia/Kolkata', std: 330},
+  {code: 'SIN', name: 'Singapore', tz: 'Asia/Singapore', std: 480},
+  {code: 'HKG', name: 'Hong Kong', tz: 'Asia/Hong_Kong', std: 480},
+  {code: 'TYO', name: 'Tokyo', tz: 'Asia/Tokyo', std: 540},
+  {code: 'SYD', name: 'Sydney', tz: 'Australia/Sydney', std: 600},
+  {code: 'AKL', name: 'Auckland', tz: 'Pacific/Auckland', std: 720},
+  {code: 'HNL', name: 'Honolulu', tz: 'Pacific/Honolulu', std: -600},
+  {code: 'LAX', name: 'Los Angeles', tz: 'America/Los_Angeles', std: -480},
+  {code: 'DEN', name: 'Denver', tz: 'America/Denver', std: -420},
+  {code: 'CHI', name: 'Chicago', tz: 'America/Chicago', std: -360},
+  {code: 'NYC', name: 'New York', tz: 'America/New_York', std: -300},
+  {code: 'SAO', name: 'Sao Paulo', tz: 'America/Sao_Paulo', std: -180},
+  {code: 'UTC', name: 'UTC', tz: 'UTC', std: 0}
+];
 var FORECAST_HOURS = 12;
 var SETTING_NAMES = Object.keys(SETTINGS);
 
 var T = {
+  LOCATION_MAX_AGE_S: 24 * 60 * 60, /* sunrise/sunset location reused for a day */
   READY_SKIP_S: 30 * 60,  /* weather delivered this recently: the watch has it persisted */
   CACHE_REUSE_S: 10 * 60, /* resend a fetch this recent instead of GPS + HTTP */
   GEO_TIMEOUT_MS: 15000,
@@ -162,12 +188,58 @@ function createPhone(env) {
     return merged;
   }
 
+  function savedLocation() {
+    var loc = readJson(LOCATION_KEY);
+    if (!loc || !num(loc.lat) || !num(loc.lon) || !num(loc.at)) return null;
+    var age = nowS() - loc.at;
+    return age >= 0 && age < T.LOCATION_MAX_AGE_S ? loc : null;
+  }
+
+  function rememberLocation(lat, lon) {
+    env.storage.setItem(LOCATION_KEY, JSON.stringify({lat: lat, lon: lon, at: nowS()}));
+  }
+
+  /* Second-zone offset and the next sunrise/sunset, added to what goes to the watch. Both are
+   * refreshed with every weather send, so a DST change is picked up within the refresh period. */
+  function addExtras(msg, tz2Index) {
+    var idx = tz2Index !== undefined ? tz2Index : (sanitizeSettings(readJson(SETTINGS_KEY)).TZ2 || 0);
+    var off = tz2Offset(idx, env.now());
+    if (off !== null) msg.TZ2_OFFSET = off;
+    var loc = savedLocation();
+    if (loc) {
+      var sun = nextSunEvents(loc.lat, loc.lon, env.now());
+      msg.SUNRISE = sun.rise;
+      msg.SUNSET = sun.set;
+    }
+    return msg;
+  }
+
+  /* The plugin weather path has no coordinates: look the location up at most once a day,
+   * accepting a fix up to a day old, and send the sun times on their own. */
+  function refreshSunLocation() {
+    if (savedLocation()) return;
+    env.getPosition(function(pos) {
+      rememberLocation(pos.coords.latitude, pos.coords.longitude);
+      var msg = addExtras({});
+      if (msg.SUNRISE !== undefined) queue.enqueue('sun', msg);
+    }, function() {
+      env.log('sun location error');
+    }, {timeout: T.GEO_TIMEOUT_MS, maximumAge: T.LOCATION_MAX_AGE_S * 1000, enableHighAccuracy: false});
+  }
+
   function sendSettings(settings) {
-    if (Object.keys(settings).length) queue.enqueue('settings', settings);
+    if (!Object.keys(settings).length) return;
+    var msg = {};
+    Object.keys(settings).forEach(function(k) { msg[k] = settings[k]; });
+    if (settings.TZ2 !== undefined) {
+      var off = tz2Offset(settings.TZ2, env.now());
+      if (off !== null) msg.TZ2_OFFSET = off;
+    }
+    queue.enqueue('settings', msg);
   }
 
   function sendWeather(temp, ts, fc) {
-    var msg = {TEMPERATURE: temp, WEATHER_TIME: ts};
+    var msg = addExtras({TEMPERATURE: temp, WEATHER_TIME: ts});
     if (fc) {
       msg.FORECAST_START = fc.start;
       /* byte arrays: temperatures as signed bytes */
@@ -229,6 +301,7 @@ function createPhone(env) {
   function fetchOpenMeteo(id) {
     env.getPosition(function(pos) {
       if (id !== fetchId || !fetching) return;
+      rememberLocation(pos.coords.latitude, pos.coords.longitude);
       fetchWeather(id, pos.coords.latitude, pos.coords.longitude);
     }, function() {
       finishFetch(id, 'location error');
@@ -271,7 +344,10 @@ function createPhone(env) {
 
   function fetchPlugin(id) {
     var r = freshPluginReading();
-    if (r) return deliver(id, r.temp, r.fc, 'plugin');
+    if (r) {
+      deliver(id, r.temp, r.fc, 'plugin');
+      return refreshSunLocation();
+    }
     var waitTimer = null;
     function done(why) {
       if (!plugin.waiter) return;
@@ -279,7 +355,10 @@ function createPhone(env) {
       env.clearTimeout(waitTimer);
       if (id !== fetchId || !fetching) return;
       var got = why === 'data' ? freshPluginReading() : null;
-      if (got) return deliver(id, got.temp, got.fc, 'plugin');
+      if (got) {
+        deliver(id, got.temp, got.fc, 'plugin');
+        return refreshSunLocation();
+      }
       env.log('weather plugin ' + (why === 'data' ? 'incomplete' : why) + ', using open-meteo');
       fetchOpenMeteo(id);
     }
@@ -359,6 +438,60 @@ function createPhone(env) {
 
 function num(v) {
   return typeof v === 'number' && !isNaN(v);
+}
+
+/* Current UTC offset in minutes of a TZ2_CITIES entry (DST included), or null when off. */
+function tz2Offset(index, nowMs) {
+  var city = TZ2_CITIES[index];
+  if (!city) return null;
+  try {
+    var parts = {};
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: city.tz, hour12: false, year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric'
+    }).formatToParts(new Date(nowMs)).forEach(function(p) { parts[p.type] = p.value; });
+    var asUtc = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute);
+    var off = Math.round((asUtc - Math.floor(nowMs / 60000) * 60000) / 60000);
+    if (num(off) && off >= -720 && off <= 840) return off;
+  } catch (e) {
+    /* no Intl time-zone data on this phone: fall through to the standard offset */
+  }
+  return city.std;
+}
+
+var RAD = Math.PI / 180;
+
+/* Sunrise and sunset (ms) for the solar day nearest dayMs, from the standard sunrise equation
+ * (accurate to a few minutes). null during polar day or night. */
+function sunEventsForDay(lat, lon, dayMs) {
+  var jd = dayMs / 86400000 + 2440587.5;
+  var n = Math.round(jd - 2451545.0 - 0.0009 + lon / 360);
+  var jStar = n + 0.0009 - lon / 360;
+  var M = (357.5291 + 0.98560028 * jStar) % 360;
+  var C = 1.9148 * Math.sin(M * RAD) + 0.02 * Math.sin(2 * M * RAD) + 0.0003 * Math.sin(3 * M * RAD);
+  var L = (M + C + 180 + 102.9372) % 360;
+  var jTransit = 2451545.0 + jStar + 0.0053 * Math.sin(M * RAD) - 0.0069 * Math.sin(2 * L * RAD);
+  var sinD = Math.sin(L * RAD) * Math.sin(23.4397 * RAD);
+  var cosD = Math.cos(Math.asin(sinD));
+  var cosW = (Math.sin(-0.833 * RAD) - Math.sin(lat * RAD) * sinD) / (Math.cos(lat * RAD) * cosD);
+  if (cosW < -1 || cosW > 1) return null;
+  var w = Math.acos(cosW) / RAD;
+  function toMs(j) { return (j - 2440587.5) * 86400000; }
+  return {rise: toMs(jTransit - w / 360), set: toMs(jTransit + w / 360)};
+}
+
+/* Next sunrise and next sunset after nowMs, as unix seconds (0 when there is none in the
+ * next two days, as in polar day or night; the watch then shows neither). */
+function nextSunEvents(lat, lon, nowMs) {
+  var rise = 0, set = 0;
+  for (var d = -1; d <= 2; d++) {
+    var e = sunEventsForDay(lat, lon, nowMs + d * 86400000);
+    if (!e) continue;
+    var r = Math.floor(e.rise / 1000), s = Math.floor(e.set / 1000);
+    if (e.rise > nowMs && (!rise || r < rise)) rise = r;
+    if (e.set > nowMs && (!set || s < set)) set = s;
+  }
+  return {rise: rise, set: set};
 }
 
 /* Open-Meteo hourly block -> {start, temps, rain, codes}, or null. Slots stop at the first
@@ -468,10 +601,12 @@ function buildConfigHtml(settings) {
     select('BOTTOM_LAYOUT', 'Bottom modules', settings, ['Date | Steps | Weather', 'Date | Battery | Weather', 'Date | Steps | Battery']) +
     select('ACCENT_COLOR', 'HUD accent', settings, ['NERV red', 'Amber', 'Green', 'Cyan']) +
     select('TEMP_UNIT', 'Temperature unit', settings, ['Celsius', 'Fahrenheit']) +
-    select('SYNC_SOURCE', 'SYNC rail source', settings, ['Data freshness', 'Steps progress', 'Battery level', 'Aesthetic diagnostic']) +
+    select('SYNC_SOURCE', 'SYNC rail source', settings, ['Data freshness', 'Steps progress', 'Battery level', 'Aesthetic diagnostic', 'Steps vs typical day']) +
     select('ANIMATION', 'Animations', settings, ['Off', 'Subtle (MAGI check only)', 'Full (system boot + MAGI check)']) +
-    select('SHAKE_SCREEN', 'Shake to show', settings, ['Off', 'Weather, next 6 hours', 'Heart rate, last 3 hours']) +
+    select('SHAKE_SCREEN', 'Shake to show', settings, ['Off', 'Weather, next 6 hours', 'Heart rate, last 3 hours', 'Steps, today']) +
     select('SHAKE_FX', 'Shake transition', settings, ['Sync Graph', 'Emergency Hex']) +
+    select('LINK_VIBE', 'Phone disconnect alert', settings, ['Off', 'Buzz and flash LINK LOST']) +
+    select('TZ2', 'Second time zone', settings, TZ2_CITIES.map(function(c) { return c ? c.name + ' (' + c.code + ')' : 'Off'; })) +
     '<button id="save">Save</button>' +
     '<div class="note">Weather comes from the Pebble app\'s weather source when it can supply the hourly forecast, ' +
     'otherwise from Open-Meteo using your phone location, refreshed about every 30 minutes. ' +
@@ -480,7 +615,10 @@ function buildConfigHtml(settings) {
     'Animations play when the face is first shown (at most once every 30 minutes) and briefly when the phone link or weather recovers. ' +
     'Off uses no animation timers at all. ' +
     'Shake to show opens the forecast or a heart-rate graph for 10 seconds, then plays the transition back to the face; shake again to return sooner. ' +
-    'With animations Off or a low battery it opens without the transition.</div>' +
+    'With animations Off or a low battery it opens without the transition. ' +
+    'Steps vs typical day compares today with the watch\'s own average for a weekday or weekend day; the yellow marker is where you usually are by now. ' +
+    'The disconnect alert buzzes if the phone stays away for 10 seconds, never during Quiet Time. ' +
+    'Sunrise and sunset are worked out on the phone from your location, checked at most once a day.</div>' +
     '</div><script>' +
     'document.getElementById("save").onclick=function(){var s={};' + JSON.stringify(SETTING_NAMES) +
     '.forEach(function(k){s[k]=parseInt(document.getElementById(k).value,10);});' +
@@ -495,6 +633,10 @@ module.exports = {
   clampSetting: clampSetting,
   parseForecast: parseForecast,
   parsePluginWeather: parsePluginWeather,
+  tz2Offset: tz2Offset,
+  nextSunEvents: nextSunEvents,
+  TZ2_CITIES: TZ2_CITIES,
+  LOCATION_KEY: LOCATION_KEY,
   buildConfigHtml: buildConfigHtml,
   SETTINGS_KEY: SETTINGS_KEY,
   LEGACY_SETTINGS_KEY: LEGACY_SETTINGS_KEY,

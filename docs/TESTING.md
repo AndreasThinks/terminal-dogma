@@ -18,6 +18,7 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 - MAGI votes and the launch/recovery transition state machine, including cooldown, cancellation, low battery, Quick View, and non-advancing clocks.
 - Shake-to-show settings and migrations, forecast validation and expiry, weather labels and conversion, and heart-rate statistics with gaps.
 - Shake-screen transitions: open, hold, reverse return, early return on another shake, reversing during the opening, debounce, and hard-cut behavior with animations off or low battery.
+- Steps pace (rail fill, marker, ahead/behind text), second-zone formatting, next sunrise/sunset choice, the disconnect alert timing, and glyph coverage for every string drawn in the 3x5 HUD font.
 
 **JavaScript tests cover:**
 
@@ -25,6 +26,7 @@ This builds `tests/c/test_logic.c` against `src/c/td_logic.c` with the host C co
 - AppMessage serialization, bounded retries, lost callbacks, and same-kind coalescing.
 - Weather caching and refresh behavior, including incomplete hourly forecasts, stale readings, request failures, and geolocation timeouts.
 - Forecast encoding and validation, shake settings, and the configuration page.
+- Second-zone offsets across daylight saving, sunrise/sunset accuracy against published times, and the once-a-day location lookup on the plugin weather path.
 
 ## Emery emulator checks
 

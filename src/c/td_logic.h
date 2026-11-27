@@ -10,20 +10,22 @@ enum { TD_CLOCK_SYSTEM, TD_CLOCK_24H, TD_CLOCK_12H };
 enum { TD_LAYOUT_STEPS_WEATHER, TD_LAYOUT_BATTERY_WEATHER, TD_LAYOUT_STEPS_BATTERY };
 enum { TD_ACCENT_RED, TD_ACCENT_AMBER, TD_ACCENT_GREEN, TD_ACCENT_CYAN };
 enum { TD_TEMP_C, TD_TEMP_F };
-enum { TD_SYNC_FRESHNESS, TD_SYNC_STEPS, TD_SYNC_BATTERY, TD_SYNC_AESTHETIC };
+enum { TD_SYNC_FRESHNESS, TD_SYNC_STEPS, TD_SYNC_BATTERY, TD_SYNC_AESTHETIC, TD_SYNC_PACE };
 enum { TD_MOTION_OFF, TD_MOTION_SUBTLE, TD_MOTION_FULL };
-enum { TD_SHAKE_OFF, TD_SHAKE_WEATHER, TD_SHAKE_HEART };
+enum { TD_SHAKE_OFF, TD_SHAKE_WEATHER, TD_SHAKE_HEART, TD_SHAKE_STEPS };
 enum { TD_FX_SYNC_GRAPH, TD_FX_EMERGENCY_HEX };
+enum { TD_VIBE_OFF, TD_VIBE_ON };
 
 typedef enum {
   TD_SET_CLOCK, TD_SET_LAYOUT, TD_SET_ACCENT, TD_SET_TEMP_UNIT, TD_SET_SYNC, TD_SET_MOTION,
-  TD_SET_SHAKE, TD_SET_SHAKE_FX,
+  TD_SET_SHAKE, TD_SET_SHAKE_FX, TD_SET_LINK_VIBE, TD_SET_TZ2,
   TD_SETTING_COUNT
 } TdSettingId;
 
 /* Schema 1: releases up to 1.0.16 (first five settings). Schema 2: adds TD_SET_MOTION.
- * Schema 3: adds TD_SET_SHAKE and TD_SET_SHAKE_FX. Schema 4: defaults shake to heart rate. */
-#define TD_SETTINGS_SCHEMA 4
+ * Schema 3: adds TD_SET_SHAKE and TD_SET_SHAKE_FX. Schema 4: defaults shake to heart rate.
+ * Schema 5: adds TD_SET_LINK_VIBE and TD_SET_TZ2, both off by default (nothing to migrate). */
+#define TD_SETTINGS_SCHEMA 5
 
 typedef struct { int v[TD_SETTING_COUNT]; } TdSettings;
 
@@ -95,12 +97,49 @@ int td_temp_in_unit(int temp_c, int unit);
 /* ---------- Heart-rate history ---------- */
 #define TD_HR_BUCKETS 18      /* 10-minute averages over the last 3 hours */
 #define TD_HR_BUCKET_S (10 * 60)
+#define TD_STEP_HOURS 24     /* hourly step buckets since midnight, for the steps screen */
 
 typedef struct { int count, min, max, avg; } TdHrStats;
 /* Statistics over buckets with a reading (value > 0). count is 0 when there are none. */
 TdHrStats td_hr_stats(const int16_t *bpm, int n);
 /* Maps v in [lo, hi] onto [y_bottom, y_top] (screen y grows downwards), with a 10% margin. */
 int td_scale_y(int v, int lo, int hi, int y_top, int y_bottom);
+
+/* ---------- Steps pace ----------
+ * Today's steps against the firmware's average for this kind of day (weekday or weekend). */
+typedef struct {
+  bool valid;          /* today and both averages are available and typical_day > 0 */
+  int32_t today;       /* steps since midnight */
+  int32_t typical_now; /* average steps by this time of day */
+  int32_t typical_day; /* average steps over the whole day */
+} TdPace;
+
+/* SYNC rail fill: today against the typical whole day, 0..100; 0 when not valid. */
+int td_pace_fill_pct(const TdPace *p);
+/* Where the typical-by-now marker sits on the rail, 0..100; -1 when not valid. */
+int td_pace_marker_pct(const TdPace *p);
+/* "680 BEHIND", "1,200 AHEAD", "ON PACE" (within 1%), or "--" when not valid. */
+void td_format_pace(char *buf, size_t n, const TdPace *p);
+
+/* ---------- Second time zone ---------- */
+#define TD_TZ2_CITY_COUNT 18 /* index 0 is Off */
+/* Three-letter code for a city index, or "" for Off and out-of-range values. */
+const char *td_tz2_label(int index);
+/* "TYO 04:05" in 24 h mode, "TYO 4:05AM" in 12 h mode. offset_min is the zone's
+ * current UTC offset in minutes (the phone supplies it, DST included). */
+void td_format_tz2(char *buf, size_t n, int index, int64_t utc_now, int offset_min, bool use_24h);
+bool td_tz2_offset_valid(int offset_min);
+
+/* ---------- Sunrise and sunset ---------- */
+/* The next of the two events still in the future: returns its time and sets *is_sunset,
+ * or returns 0 when both have passed or are unknown (0). */
+int64_t td_sun_next(int64_t sunrise, int64_t sunset, int64_t now, bool *is_sunset);
+
+/* ---------- Tiny HUD font ---------- */
+/* Row bits (3 wide, MSB left) of the 3x5 HUD font; lower case maps to upper case.
+ * td_glyph_known is false for characters the font has no glyph for (drawn blank). */
+uint8_t td_glyph_row(char c, int row);
+bool td_glyph_known(char c);
 
 /* ---------- Health, power, clock, link ---------- */
 typedef struct { bool valid; int32_t value; } TdReading;
@@ -125,6 +164,14 @@ typedef struct { bool connected; int64_t lost_at; } TdLink;
 /* Returns true only on a disconnected -> connected edge after an outage of at
  * least TD_LINK_MEANINGFUL_OUTAGE_S. Brief flaps are ignored. */
 bool td_link_update(TdLink *l, bool connected, int64_t now);
+#define TD_LINK_ALERT_DELAY_S 10 /* buzz only if the link is still down after this */
+#define TD_LINK_ALERT_SHOW_S 60  /* the LINK LOST plate shows this long after the loss */
+/* True while the inverted LINK LOST plate should show: link down for less than
+ * TD_LINK_ALERT_SHOW_S. The buzz itself is decided by td_link_should_buzz. */
+bool td_link_alert_showing(const TdLink *l, int64_t now);
+/* The delayed disconnect buzz: on when the setting is on, the link is still down, and
+ * Quiet Time is off. */
+bool td_link_should_buzz(const TdLink *l, int vibe_setting, bool quiet_time);
 
 /* ---------- MAGI checks ---------- */
 typedef enum { TD_VOTE_PENDING, TD_VOTE_PASS, TD_VOTE_LOW, TD_VOTE_LOST, TD_VOTE_OLD, TD_VOTE_NONE } TdVote;
@@ -206,7 +253,7 @@ typedef enum {
 
 typedef struct {
   TdPeekPhase phase;
-  int screen;          /* TD_SHAKE_WEATHER or TD_SHAKE_HEART while open */
+  int screen;          /* TD_SHAKE_WEATHER, TD_SHAKE_HEART or TD_SHAKE_STEPS while open */
   int fx;              /* TD_FX_* while in TD_PEEK_IN or TD_PEEK_OUT */
   int t_ms;            /* transition clock; TD_PEEK_OUT draws the IN frame at duration - t_ms */
   int steps;
