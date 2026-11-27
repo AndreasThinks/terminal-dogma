@@ -7,6 +7,7 @@
   - Plugin conditions map onto the existing forecast labels (CLEAR, CLOUD, RAIN, SNOW).
 - `package.json` declares `usesPermissions` for the new permission prompts: Location (required) and Internet for `api.open-meteo.com` (optional, used by the fallback).
 - Building needs SDK 4.44+ and pebble-tool 5.1.0+.
+- Fix the shake screen reopening straight away when it is closed by a shake with animations Off or a low battery. The hard cut closed it on the first tap, and the rest of that shake's taps opened it again.
 
 ## 1.0.21
 

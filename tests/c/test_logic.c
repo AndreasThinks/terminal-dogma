@@ -719,6 +719,28 @@ TEST(peek_return_cuts_when_motion_off_or_battery_low) {
   CHECK(!td_peek_open(&p));
 }
 
+TEST(peek_cut_return_is_not_reopened_by_the_same_shake) {
+  TdPeek p = {0};
+  TdPeekEnv e = peek_env(TD_SHAKE_HEART, TD_FX_SYNC_GRAPH, TD_MOTION_OFF, 80);
+  CHECK(td_peek_tap(&p, &e, 0) == TD_PEEK_OPEN_CUT);
+  CHECK(td_peek_tap(&p, &e, 3000) == TD_PEEK_CLOSE);
+  /* the rest of that shake's taps */
+  CHECK(td_peek_tap(&p, &e, 3040) == TD_PEEK_NOOP);
+  CHECK(td_peek_tap(&p, &e, 3000 + TD_PEEK_DEBOUNCE_MS - 1) == TD_PEEK_NOOP);
+  CHECK(!td_peek_open(&p));
+  /* a later, separate shake opens it again */
+  CHECK(td_peek_tap(&p, &e, 3000 + TD_PEEK_DEBOUNCE_MS) == TD_PEEK_OPEN_CUT);
+  /* a clock that moved backwards does not lock the screen out */
+  CHECK(td_peek_tap(&p, &e, 10000) == TD_PEEK_CLOSE);
+  CHECK(td_peek_tap(&p, &e, 9000) == TD_PEEK_OPEN_CUT);
+  /* a timed hard-cut return (no shake) leaves the next shake free to open it */
+  td_peek_close(&p);
+  TdPeek q = {0};
+  CHECK(td_peek_tap(&q, &e, 0) == TD_PEEK_OPEN_CUT);
+  CHECK(td_peek_dismiss(&q, &e) == TD_PEEK_CLOSE);
+  CHECK(td_peek_tap(&q, &e, 20) == TD_PEEK_OPEN_CUT);
+}
+
 TEST(peek_transition_always_terminates) {
   int dts[] = {0, 1, -50, 100000, TD_FRAME_MS};
   for (unsigned i = 0; i < sizeof(dts) / sizeof(dts[0]); i++) {
@@ -779,6 +801,7 @@ int main(void) {
   RUN(peek_return_plays_the_same_transition_backwards);
   RUN(peek_return_mid_opening_reverses_from_the_frame_on_screen);
   RUN(peek_return_cuts_when_motion_off_or_battery_low);
+  RUN(peek_cut_return_is_not_reopened_by_the_same_shake);
   RUN(peek_transition_always_terminates);
   printf("C logic: %d checks, %d failures\n", s_checks, s_failures);
   return s_failures ? 1 : 0;

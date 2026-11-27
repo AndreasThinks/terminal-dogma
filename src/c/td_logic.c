@@ -468,7 +468,18 @@ TdPeekEvent td_peek_tap(TdPeek *p, const TdPeekEnv *env, int64_t now_ms) {
     int64_t since = now_ms - p->opened_ms;
     /* A clock that moved backwards cannot hold the screen open: treat as elapsed. */
     if (since >= 0 && since < TD_PEEK_DEBOUNCE_MS) return TD_PEEK_NOOP;
-    return td_peek_dismiss(p, env);
+    TdPeekEvent ev = td_peek_dismiss(p, env);
+    if (ev == TD_PEEK_CLOSE) {
+      p->cut_ms = now_ms;
+      p->cut_by_tap = true;
+    }
+    return ev;
+  }
+  /* A hard cut closes instantly, so the rest of the same shake would reopen the screen. */
+  if (p->cut_by_tap) {
+    int64_t since = now_ms - p->cut_ms;
+    if (since >= 0 && since < TD_PEEK_DEBOUNCE_MS) return TD_PEEK_NOOP;
+    p->cut_by_tap = false;
   }
   if (env->shake != TD_SHAKE_WEATHER && env->shake != TD_SHAKE_HEART) return TD_PEEK_NOOP;
   p->screen = env->shake;
