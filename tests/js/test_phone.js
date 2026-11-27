@@ -435,5 +435,140 @@ test('shake settings are stored, clamped and on the config page', function() {
   check(html.indexOf('<option value="1" selected>Emergency Hex') > 0, 'current transition selected');
 });
 
+/* ---------- Pebble plugin weather source ---------- */
+
+/* now = 1760000000s. Series start at local midnight; 1759968000 is 8.9h before now. */
+var MIDNIGHT = 1759968000;
+function pluginEnvelope(opts) {
+  opts = opts || {};
+  var hours = [];
+  var rain = [];
+  var codes = [];
+  for (var i = 0; i < 24; i++) {
+    hours.push(opts.fahrenheit ? 50 + i : 10 + i);
+    rain.push(i === 10 ? 60 : 5);
+    codes.push(i === 10 ? 'heavy_rain' : 'cloudy');
+  }
+  var props = {
+    temperature: {numericValue: {value: opts.fahrenheit ? 64.4 : 18.2, unit: opts.fahrenheit ? '°F' : '°C'},
+                  shortText: {text: '18°'}},
+    hourly_temperature: {series: {start: MIDNIGHT, stepSec: 3600,
+                                  numericValue: {values: hours, unit: opts.fahrenheit ? '°F' : '°C'}}},
+    hourly_condition_code: {series: {start: MIDNIGHT, stepSec: 3600, shortText: codes}}
+  };
+  if (!opts.noRain) {
+    props.hourly_precipitation = {series: {start: MIDNIGHT, stepSec: 3600, numericValue: {values: rain, unit: '%'}}};
+  }
+  return {pluginUuid: 'x', validUntilMs: 1760000000000 + 15 * 60000,
+          instances: [{instanceId: 'here', properties: props}]};
+}
+
+function withPlugin(env) {
+  env.subs = [];
+  env.subscribeToSource = function(req) { env.subs.push(req); return {unsubscribe: function() {}}; };
+  return env;
+}
+
+test('plugin weather is parsed from the current hour, in Celsius, with mapped conditions', function() {
+  var r = phoneLib.parsePluginWeather(pluginEnvelope(), 1760000000);
+  eq(r.temp, 18, 'current temperature');
+  eq(r.fc.start, MIDNIGHT + 8 * 3600, 'forecast starts at this hour, not midnight');
+  eq(r.fc.temps.slice(0, 3), [18, 19, 20], 'hourly temperatures from slot 8');
+  eq(r.fc.temps.length, 12, 'twelve hours');
+  eq(r.fc.rain.slice(0, 3), [5, 5, 60], 'rain chance');
+  eq(r.fc.codes.slice(0, 3), [3, 3, 65], 'cloudy -> 3, heavy_rain -> 65');
+  var f = phoneLib.parsePluginWeather(pluginEnvelope({fahrenheit: true}), 1760000000);
+  eq(f.temp, 18, 'Fahrenheit current converted to Celsius');
+  eq(f.fc.temps[0], 14, '58°F -> 14°C');
+});
+
+test('plugin weather without hourly rain chance is rejected rather than shown as dry', function() {
+  eq(phoneLib.parsePluginWeather(pluginEnvelope({noRain: true}), 1760000000), null, 'null');
+  eq(phoneLib.parsePluginWeather({instances: []}, 1760000000), null, 'no instance');
+});
+
+test('fetch uses the plugin source and skips GPS and Open-Meteo', function() {
+  var env = withPlugin(makeEnv());
+  var p = phoneLib.createPhone(env);
+  eq(p.requestWeather('watch'), 'fetch', 'fetching');
+  eq(env.subs.length, 1, 'subscribed once');
+  eq(env.subs[0].category + '/' + env.subs[0].item, 'weather/location', 'weather source');
+  env.subs[0].onData(pluginEnvelope());
+  eq(env.geoCalls, 0, 'no GPS');
+  eq(env.xhrs.length, 0, 'no HTTP');
+  eq(env.sent[0].msg.TEMPERATURE, 18, 'temperature sent');
+  eq(env.sent[0].msg.FORECAST_START, MIDNIGHT + 8 * 3600, 'forecast sent');
+  check(!p.isFetching(), 'fetch finished');
+  eq(JSON.parse(env.storage.getItem(phoneLib.WEATHER_KEY)).src, 'plugin', 'cache records the source');
+});
+
+test('a later fetch reuses the newest plugin reading without resubscribing', function() {
+  var env = withPlugin(makeEnv());
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  env.subs[0].onData(pluginEnvelope());
+  env.sent[0].ok();
+  env.advance(11 * 60 * 1000); /* past the phone cache, still inside validUntilMs */
+  eq(p.requestWeather('watch'), 'fetch', 'fetching again');
+  eq(env.subs.length, 1, 'same subscription');
+  eq(env.sent.length, 2, 'sent straight away from the latest envelope');
+  eq(env.xhrs.length, 0, 'no HTTP');
+});
+
+test('incomplete plugin data falls back to Open-Meteo', function() {
+  var env = withPlugin(makeEnv());
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  env.subs[0].onData(pluginEnvelope({noRain: true}));
+  eq(env.geoCalls, 1, 'GPS used');
+  respond(env.xhrs[0], 200, GOOD);
+  eq(env.sent[0].msg.TEMPERATURE, 18, 'Open-Meteo reading sent');
+  eq(JSON.parse(env.storage.getItem(phoneLib.WEATHER_KEY)).src, 'open-meteo', 'source recorded');
+});
+
+test('a silent plugin source times out to Open-Meteo', function() {
+  var env = withPlugin(makeEnv());
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  env.advance(T.PLUGIN_WAIT_MS - 1);
+  eq(env.geoCalls, 0, 'still waiting');
+  env.advance(1);
+  eq(env.geoCalls, 1, 'fell back after the wait');
+  respond(env.xhrs[0], 200, GOOD);
+  eq(env.sent.length, 1, 'reading sent');
+  /* late plugin data after the fallback does not send twice */
+  env.subs[0].onData(pluginEnvelope());
+  eq(env.sent.length, 1, 'no duplicate send');
+});
+
+test('permission denied falls back now and stops waiting on the plugin', function() {
+  var env = withPlugin(makeEnv());
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  env.subs[0].onError({code: 'PERMISSION_DENIED', message: 'no'});
+  eq(env.geoCalls, 1, 'immediate fallback');
+  respond(env.xhrs[0], 200, GOOD);
+  env.sent[0].ok();
+  env.advance(11 * 60 * 1000);
+  p.requestWeather('watch');
+  eq(env.geoCalls, 2, 'second fetch goes straight to GPS');
+});
+
+test('a throwing subscribe call falls back to Open-Meteo', function() {
+  var env = makeEnv();
+  env.subscribeToSource = function() { throw new Error('nope'); };
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  eq(env.geoCalls, 1, 'GPS used');
+});
+
+test('without the plugin API the Open-Meteo path is unchanged', function() {
+  var env = makeEnv();
+  var p = phoneLib.createPhone(env);
+  p.requestWeather('watch');
+  eq(env.geoCalls, 1, 'GPS used');
+  eq(env.xhrs.length, 1, 'HTTP used');
+});
+
 console.log('JS phone: ' + checks + ' checks, ' + failures + ' failures');
 process.exit(failures ? 1 : 0);

@@ -6,6 +6,9 @@ var phone = require('./phone').createPhone({
   storage: localStorage,
   getPosition: function(ok, err, opts) { navigator.geolocation.getCurrentPosition(ok, err, opts); },
   createXhr: function() { return new XMLHttpRequest(); },
+  /* Pebble plugin sources exist from mobile app 2.0; older apps fall back to Open-Meteo. */
+  subscribeToSource: typeof Pebble.subscribeToSource === 'function' ?
+    function(req) { return Pebble.subscribeToSource(req); } : null,
   log: function(msg) { console.log('Terminal Dogma: ' + msg); }
 });
 
